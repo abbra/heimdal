@@ -657,6 +657,8 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
     void *pkp = NULL;
     char *client_cert = NULL;
     char *reject_reason = NULL;
+    unsigned char *client_cert_der = NULL;
+    size_t client_cert_der_len = 0;
     krb5_error_code ret;
     const char *keyex_name = NULL;
 
@@ -712,7 +714,38 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 				      r->config->pkinit_princ_in_cert,
 				      _kdc_is_anonymous(r->context, r->client_princ) ||
 				      r->config->historical_anon_realm,
-				      &client_cert, &reject_reason);
+				      &client_cert, &reject_reason,
+				      &client_cert_der, &client_cert_der_len);
+    if (client_cert_der != NULL && client_cert_der_len > 0) {
+	/*
+	 * heimdal_pkinit_check_client() cannot compute the certificate's
+	 * real X.509 subject DN itself (see the TODO in kdc.rs on
+	 * bindgen/internal-struct-layout risk for krb5_context_data);
+	 * do it here instead with hx509, which already has the correct
+	 * layouts, exactly as the legacy _kdc_pk_check_client() does.
+	 * Best-effort: on any failure client_cert keeps the
+	 * "PKINIT:<principal>" placeholder from the Rust side.
+	 */
+	hx509_cert cert = hx509_cert_init_data(r->context->hx509ctx,
+					       client_cert_der,
+					       client_cert_der_len,
+					       NULL);
+	if (cert != NULL) {
+	    hx509_name name;
+
+	    if (hx509_cert_get_base_subject(r->context->hx509ctx, cert,
+					    &name) == 0) {
+		char *real_subject = NULL;
+
+		if (hx509_name_to_string(name, &real_subject) == 0) {
+		    free(client_cert);
+		    client_cert = real_subject;
+		}
+		hx509_name_free(&name);
+	    }
+	    hx509_cert_free(cert);
+	}
+    }
     if (client_cert)
 	kdc_audit_addkv((kdc_request_t)r, 0, KDC_REQUEST_KV_PKINIT_CLIENT_CERT,
 			"%s", client_cert);
@@ -788,6 +821,7 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 	heimdal_pkinit_free_client_param(pkp);
     free(client_cert);
     free(reject_reason);
+    free(client_cert_der);
 
     return ret;
 }

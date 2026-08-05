@@ -116,6 +116,16 @@ heimdal_pkinit_mk_pa_reply(krb5_context context,
  * On failure, if *out_reject_reason is non-NULL, it is a malloc'd
  * human-readable string describing why (caller frees); it may remain NULL
  * even on failure (e.g. allocation failure formatting the reason itself).
+ *
+ * On success, if a certificate was presented (i.e. not a certless
+ * anonymous request), *out_client_cert_der/*out_client_cert_der_len are
+ * also set to a malloc'd copy of the raw client certificate DER (caller
+ * frees), so the caller can compute the certificate's real X.509 subject
+ * DN via hx509 (hx509_cert_init_data + hx509_cert_get_base_subject +
+ * hx509_name_to_string) for audit-log fidelity, in place of the
+ * "PKINIT:<principal>" placeholder in *out_subject. Both are set to
+ * NULL/0 on entry and left that way when no certificate was presented or
+ * on any error.
  */
 krb5_error_code
 heimdal_pkinit_check_client(const void *params,
@@ -123,7 +133,9 @@ heimdal_pkinit_check_client(const void *params,
                             int princ_in_cert,
                             int is_client_anonymous_principal,
                             char **out_subject,
-                            char **out_reject_reason);
+                            char **out_reject_reason,
+                            unsigned char **out_client_cert_der,
+                            size_t *out_client_cert_der_len);
 
 /*
  * Free the opaque params allocated by heimdal_pkinit_rd_padata().

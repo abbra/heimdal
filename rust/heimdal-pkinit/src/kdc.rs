@@ -326,13 +326,17 @@ pub(crate) fn check_client(
 
     match result {
         pkinit_core::certauth::CertauthResult::Authorized => {
-            // TODO(follow-up): extract the real certificate subject DN for
-            // audit fidelity. Doing so today would require dereferencing
+            // This is a placeholder, not the certificate's real X.509
+            // subject DN: computing that would require dereferencing
             // krb5_context_data.hx509ctx, an internal struct whose layout
             // is not guaranteed to match what bindgen generates from the
             // *installed* Heimdal headers (see config.rs's comment on the
-            // same risk for krb5_kdc_configuration) until build.rs is
-            // pointed at the in-tree headers.
+            // same risk for krb5_kdc_configuration). Instead,
+            // heimdal_pkinit_check_client() in ffi.rs also returns the raw
+            // client_cert_der alongside this string, and the KDC-side
+            // caller (kdc/kerberos5.c) uses its own correctly-typed hx509
+            // to compute the real subject DN and replace this placeholder
+            // before it reaches the audit log.
             Ok(format!("PKINIT:{}", client_principal))
         }
         pkinit_core::certauth::CertauthResult::Rejected(reason) => Err(CheckClientError::Code(

@@ -310,6 +310,15 @@ pub unsafe extern "C" fn heimdal_pkinit_mk_pa_reply(
 /// Replaces `_kdc_pk_check_client`.  On success, `*out_subject` is set to
 /// a malloc'd string with the subject name (caller must free).
 ///
+/// When a certificate was presented (i.e. this was not a certless
+/// anonymous request), `*out_client_cert_der`/`*out_client_cert_der_len`
+/// are also set to a malloc'd copy of the raw client certificate DER on
+/// success, so the caller can compute the certificate's real X.509
+/// subject DN via hx509 (which already has the correct, non-bindgen'd
+/// struct layouts) instead of the `PKINIT:<principal>` placeholder this
+/// function writes to `*out_subject`. This is left unset (null/0) when no
+/// certificate was presented, or on any error.
+///
 /// # Safety
 ///
 /// All pointer arguments must be valid.
@@ -321,20 +330,26 @@ pub unsafe extern "C" fn heimdal_pkinit_check_client(
     is_client_anonymous_principal: i32,
     out_subject: *mut *mut c_char,
     out_reject_reason: *mut *mut c_char,
+    out_client_cert_der: *mut *mut u8,
+    out_client_cert_der_len: *mut usize,
 ) -> bindings::krb5_error_code {
     if params.is_null()
         || client_principal.is_null()
         || out_subject.is_null()
         || out_reject_reason.is_null()
+        || out_client_cert_der.is_null()
+        || out_client_cert_der_len.is_null()
     {
         return libc::EINVAL as _;
     }
-    // SAFETY: both out-params were just checked non-null above; zeroing
+    // SAFETY: all out-params were just checked non-null above; zeroing
     // them here means every error path below leaves them well-defined
     // even if the caller forgot to pre-initialize them.
     unsafe {
         *out_subject = std::ptr::null_mut();
         *out_reject_reason = std::ptr::null_mut();
+        *out_client_cert_der = std::ptr::null_mut();
+        *out_client_cert_der_len = 0;
     }
 
     let cp = unsafe { &*(params as *const PkClientParams) };
@@ -357,6 +372,18 @@ pub unsafe extern "C" fn heimdal_pkinit_check_client(
                 return libc::ENOMEM as _;
             };
             unsafe { *out_subject = buf as *mut c_char };
+
+            // Best-effort: if this fails (e.g. OOM), the caller falls
+            // back to the placeholder subject string above rather than
+            // failing the whole (already-authorized) request.
+            if !cp.verified.client_cert_der.is_empty()
+                && let Some((der_buf, der_len)) = to_c_buffer(&cp.verified.client_cert_der)
+            {
+                unsafe {
+                    *out_client_cert_der = der_buf;
+                    *out_client_cert_der_len = der_len;
+                }
+            }
             0
         }
         Err(kdc::CheckClientError::Code(code, reason)) => {
