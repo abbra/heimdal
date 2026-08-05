@@ -39,6 +39,7 @@
 #include <heimbasepriv.h>
 
 #ifdef PKINIT_RUST
+#include "heimdal_pkinit.h"
 /* Rust pkinit-core adapter — prototypes from pkinit-rust.c */
 krb5_error_code _krb5_pk_mk_padata_rust(krb5_context, void *, int, int,
 					 const KDC_REQ_BODY *, unsigned,
@@ -1314,6 +1315,32 @@ pkinit_step(krb5_context context,
         }
         switch (error_code) {
         case KRB5_KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED:
+#ifdef PKINIT_RUST
+	    /*
+	     * Route the retry through pkinit-core's handle_tryagain(),
+	     * which handles both DH group renegotiation and KEM algorithm
+	     * fallback (draft-bokovoy-kitten-pkinit-pqc).
+	     */
+	    if (td) {
+		unsigned char *td_der = NULL;
+		size_t td_len = 0;
+		ASN1_MALLOC_ENCODE(TYPED_DATA, td_der, td_len, td, &td_len, ret);
+		if (ret == 0 && td_der) {
+		    ret = heimdal_pkinit_client_tryagain(ctx->pk_init_ctx,
+						      td_der, td_len);
+		    free(td_der);
+		    if (ret) {
+			_krb5_debug(context, 1,
+				    "PKINIT(rust): no acceptable key exchange parameters");
+			return error_code;
+		    }
+		    _krb5_debug(context, 1,
+				"PKINIT(rust): retrying with updated key exchange parameters");
+		    break;
+		}
+	    }
+	    return error_code;
+#else
             /*
              * In PKINIT the client picks a key agreement group/curve and the
              * KDC can reject it, listing alternatives to try.  That makes this
@@ -1335,6 +1362,7 @@ pkinit_step(krb5_context context,
                 /* _krb5_typed_data_get_dh_params() will have traced why */
                 return error_code;
             break;
+#endif /* PKINIT_RUST */
         case KRB5_KDC_ERR_NO_ACCEPTABLE_KDF:
             /*
              * In PKINIT the server (KDC) picks a KDF to use.  The client tells

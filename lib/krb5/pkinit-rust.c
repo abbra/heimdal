@@ -22,21 +22,6 @@
 #include <pkinit_asn1.h>
 
 /*
- * Client context: wraps the Rust opaque pointer alongside the fields
- * that Heimdal's init_creds_pw.c expects on the krb5_pk_init_ctx.
- *
- * The Rust side owns all crypto state; this struct just holds the
- * opaque handle and Heimdal-specific metadata.
- */
-struct krb5_pk_init_ctx_rust {
-    void *rust_ctx;		    /* heimdal_pkinit_client_init() handle */
-    enum krb5_pk_type type;	    /* PKINIT_27 for IETF, PKINIT_WIN2K */
-    enum keyex_enum keyex;	    /* USE_DH, USE_ECDH, or USE_RSA */
-    unsigned int anonymous:1;
-    krb5_data as_req;		    /* cached DER of last AS-REQ */
-};
-
-/*
  * _krb5_pk_mk_padata — build PA-PK-AS-REQ
  *
  * This is the Rust-backed replacement.  The original C version in
@@ -54,7 +39,6 @@ _krb5_pk_mk_padata_rust(krb5_context context,
 			TYPED_DATA *td,
 			METHOD_DATA *md)
 {
-    struct krb5_pk_init_ctx_rust *ctx = c;
     unsigned char *req_body_der = NULL;
     size_t req_body_len = 0, size;
     unsigned char *pa_data = NULL;
@@ -62,7 +46,7 @@ _krb5_pk_mk_padata_rust(krb5_context context,
     krb5_error_code ret;
     krb5_timestamp now;
 
-    if (ctx == NULL || ctx->rust_ctx == NULL)
+    if (c == NULL)
 	return EINVAL;
 
     /* Encode the request body to DER for pkinit-core's checksum */
@@ -77,7 +61,7 @@ _krb5_pk_mk_padata_rust(krb5_context context,
 
     krb5_timeofday(context, &now);
 
-    ret = heimdal_pkinit_client_mk_padata(ctx->rust_ctx,
+    ret = heimdal_pkinit_client_mk_padata(c,
 					  (int)nonce,
 					  (long long)now,
 					  0, /* cusec */
@@ -102,7 +86,7 @@ _krb5_pk_mk_padata_rust(krb5_context context,
  * _krb5_pk_rd_pa_reply — process PA-PK-AS-REP
  *
  * Rust-backed replacement.  Verifies the KDC's CMS signature,
- * performs DH/KEM key agreement, and derives the reply key.
+ * performs Dagreement, and derives the reply key.
  */
 krb5_error_code
 _krb5_pk_rd_pa_reply_rust(krb5_context context,
@@ -114,36 +98,65 @@ _krb5_pk_rd_pa_reply_rust(krb5_context context,
 			  PA_DATA *pa,
 			  krb5_keyblock **key)
 {
-    struct krb5_pk_init_ctx_rust *ctx = c;
     krb5_error_code ret;
     krb5_keyblock *k = NULL;
     char *client_name = NULL;
     char *server_name = NULL;
+    krb5_enctype enctype;
 
-    if (ctx == NULL || ctx->rust_ctx == NULL)
+    if (c == NULL)
 	return EINVAL;
 
     k = calloc(1, sizeof(*k));
     if (k == NULL)
 	return krb5_enomem(context);
 
-    if (a->req_body.cname)
-	krb5_unparse_name(context,
-			  kdc_rep->cname ? (krb5_const_principal)kdc_rep->cname : NULL,
-			  &client_name);
-    if (a->req_body.sname)
-	krb5_unparse_name(context,
-			  kdc_rep->crealm ? (krb5_const_principal)NULL : NULL,
-			  &server_name);
+    /*
+     * The enctype for key derivation comes from the KDC's reply
+     * enc-part — that's what the original C code uses too.
+     */
+    enctype = kdc_rep->enc_part.etype;
 
-    /* Use cname/sname from the request if we couldn't get them above */
+    /*
+     * Unparse client and server principals for KDF input.
+     * The C pkinit.c uses krb5_pk_init_ctx->client/server for this,
+     * but we need to derive them from the request/reply.
+     */
+    {
+	krb5_principal cprinc = NULL;
+
+	/* Client: use the cname from the reply (canonicalized) */
+	if (kdc_rep->cname.name_string.len > 0) {
+	    ret = _krb5_principalname2krb5_principal(context, &cprinc,
+						     kdc_rep->cname,
+						     kdc_rep->crealm);
+	    if (ret == 0) {
+		krb5_unparse_name(context, cprinc, &client_name);
+		krb5_free_principal(context, cprinc);
+	    }
+	}
+
+	/* Server: from the request sname */
+	if (a->req_body.sname) {
+	    krb5_principal sprinc = NULL;
+
+	    ret = _krb5_principalname2krb5_principal(context, &sprinc,
+						     *a->req_body.sname,
+						     a->req_body.realm);
+	    if (ret == 0) {
+		krb5_unparse_name(context, sprinc, &server_name);
+		krb5_free_principal(context, sprinc);
+	    }
+	}
+    }
+
     ret = heimdal_pkinit_client_rd_pa_reply(context,
-					    ctx->rust_ctx,
+					    c,
 					    pa->padata_value.data,
 					    pa->padata_value.length,
 					    (int)nonce,
-					    0, /* enctype — derived internally */
-					    req_buffer ? req_buffer->data : NULL,
+					    (int)enctype,
+					    req_buffer ? (const unsigned char *)req_buffer->data : NULL,
 					    req_buffer ? req_buffer->length : 0,
 					    client_name ? client_name : "",
 					    server_name ? server_name : "",
