@@ -284,13 +284,23 @@ else
     fi
 
     # Verify key binaries exist
-    for bin in sbin/kdc bin/kinit sbin/kadmin; do
-        if [ -x "$PREFIX/$bin" ]; then
-            check_result "$PREFIX/$bin exists" 0
-        else
-            check_result "$PREFIX/$bin exists" 1
-        fi
+    for bin in kinit kadmin; do
+        found=0
+        for dir in bin sbin libexec; do
+            if [ -x "$PREFIX/$dir/$bin" ]; then
+                check_result "$PREFIX/$dir/$bin exists" 0
+                found=1
+                break
+            fi
+        done
+        [ "$found" -eq 0 ] && check_result "$bin not found" 1
     done
+    # KDC is special — may be in libexec
+    if [ -x "$PREFIX/libexec/kdc" ] || [ -x "$PREFIX/sbin/kdc" ]; then
+        check_result "kdc binary exists" 0
+    else
+        check_result "kdc binary exists" 1
+    fi
 fi
 
 # ── Step 7: Integration tests ────────────────────────────────────────

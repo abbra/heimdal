@@ -38,6 +38,8 @@
 #include <parse_bytes.h>
 #ifdef PKINIT_RUST
 #include "heimdal_pkinit.h"
+extern void pkinit_rust_trace(krb5_context, krb5_kdc_configuration *,
+			     int, const char *);
 #endif
 
 static const char *sysplugin_dirs[] =  {
@@ -417,6 +419,7 @@ krb5_kdc_pkinit_config(krb5_context context, krb5_kdc_configuration *config)
 	    krb5_errx(context, 1, "pkinit enabled but no X509 anchors");
 
 #ifdef PKINIT_RUST
+	heimdal_pkinit_set_trace(pkinit_rust_trace);
 	heimdal_pkinit_initialize(context, config);
 #else
 	krb5_kdc_pk_initialize(context, config,

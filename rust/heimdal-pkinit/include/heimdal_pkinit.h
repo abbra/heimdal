@@ -37,6 +37,16 @@ extern "C" {
 /* ── KDC side ──────────────────────────────────────────────────────── */
 
 /*
+ * Register the trace/logging callback.  Must be called before
+ * heimdal_pkinit_initialize() so that init-time log messages
+ * reach the KDC log.
+ */
+void
+heimdal_pkinit_set_trace(void (*fn)(krb5_context,
+                                    krb5_kdc_configuration *,
+                                    int, const char *));
+
+/*
  * Initialize the PKINIT subsystem (called once at KDC startup).
  * Replaces krb5_kdc_pk_initialize().
  */

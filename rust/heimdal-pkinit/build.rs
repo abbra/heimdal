@@ -80,8 +80,9 @@ fn main() {
         .allowlist_function("hx509_cms_verify_signed")
         .allowlist_function("hx509_cms_create_signed_1")
         .allowlist_function("hx509_cms_unwrap_ContentInfo")
-        // KDC functions
-        .allowlist_function("kdc_log")
+        // KDC functions — kdc_log is NOT listed here because it's only
+        // available in the KDC binary, not libkrb5.  The trace module
+        // uses a callback pointer instead.
         // ASN.1 encode/decode functions for PKINIT types
         .allowlist_function("encode_.*")
         .allowlist_function("decode_.*")

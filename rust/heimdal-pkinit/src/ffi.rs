@@ -15,6 +15,24 @@ use crate::bindings;
 use crate::client::PkinitClientCtx;
 use crate::kdc::{self, PkClientParams};
 
+/// Register the trace/logging callback.  Called from the KDC's
+/// `pkinit-rust.c` during initialization.
+///
+/// # Safety
+///
+/// `f` must be a valid function pointer with `extern "C"` ABI.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn heimdal_pkinit_set_trace(
+    f: unsafe extern "C" fn(
+        bindings::krb5_context,
+        *mut bindings::krb5_kdc_configuration,
+        std::ffi::c_int,
+        *const std::ffi::c_char,
+    ),
+) {
+    crate::trace::set_trace_fn(f);
+}
+
 /// Initialize the PKINIT subsystem.
 ///
 /// Replaces `krb5_kdc_pk_initialize`.  Should be called once during KDC
