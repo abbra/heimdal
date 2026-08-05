@@ -15,6 +15,16 @@ use crate::bindings;
 use crate::client::PkinitClientCtx;
 use crate::kdc::{self, PkClientParams};
 
+/// Run `f`, converting any panic into `on_panic` instead of letting it
+/// unwind across the `extern "C"` boundary (undefined behavior per the
+/// Rustonomicon: "unwinding into a foreign function is undefined
+/// behavior"). Used by every exported entry point that can transitively
+/// reach a poisoned-mutex panic or a pkinit-core panic while processing
+/// attacker-controlled input.
+fn catch_ffi_panic<T>(f: impl FnOnce() -> T + std::panic::UnwindSafe, on_panic: T) -> T {
+    std::panic::catch_unwind(f).unwrap_or(on_panic)
+}
+
 /// Register the trace/logging callback.  Called from the KDC's
 /// `pkinit-rust.c` during initialization.
 ///
@@ -46,7 +56,16 @@ pub unsafe extern "C" fn heimdal_pkinit_initialize(
     context: bindings::krb5_context,
     config: *mut bindings::krb5_kdc_configuration,
 ) -> bindings::krb5_error_code {
-    unsafe { kdc::initialize(context, config) }
+    let context_addr = context as usize;
+    let config_addr = config as usize;
+    catch_ffi_panic(
+        move || {
+            let context = context_addr as bindings::krb5_context;
+            let config = config_addr as *mut bindings::krb5_kdc_configuration;
+            unsafe { kdc::initialize(context, config) }
+        },
+        libc::EINVAL as _,
+    )
 }
 
 /// Process an incoming PA-PK-AS-REQ.
@@ -71,23 +90,46 @@ pub unsafe extern "C" fn heimdal_pkinit_rd_padata(
     }
     unsafe { *out_params = std::ptr::null_mut() };
 
-    let max_skew = unsafe { bindings::krb5_get_max_time_skew(context) as i64 };
-    let current_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    // SAFETY: context/config/pa_data are the caller's responsibility per
+    // this function's documented contract; the pointers themselves are
+    // only dereferenced within the closure, not held across the
+    // catch_unwind call, so round-tripping them through usize to satisfy
+    // UnwindSafe is sound.
+    let context_addr = context as usize;
+    let config_addr = config as usize;
+    let pa_data_addr = pa_data as usize;
 
-    // Check if PQC is required
-    let require_pqc =
-        unsafe { crate::config::read_config_bool(context, &["kdc", "pkinit_require_pqc"], false) };
+    catch_ffi_panic(
+        move || {
+            let context = context_addr as bindings::krb5_context;
+            let config = config_addr as *mut bindings::krb5_kdc_configuration;
+            let pa_data = pa_data_addr as *const u8;
 
-    match unsafe { kdc::verify_padata(context, config, pa_data, pa_data_len, max_skew, current_time, require_pqc) } {
-        Ok(cp) => {
-            unsafe { *out_params = Box::into_raw(cp) as *mut c_void };
-            0
-        }
-        Err(code) => code,
-    }
+            let max_skew = unsafe { bindings::krb5_get_max_time_skew(context) as i64 };
+            let current_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+
+            // Check if PQC is required
+            let require_pqc = unsafe {
+                crate::config::read_config_bool(context, &["kdc", "pkinit_require_pqc"], false)
+            };
+
+            match unsafe {
+                kdc::verify_padata(
+                    context, config, pa_data, pa_data_len, max_skew, current_time, require_pqc,
+                )
+            } {
+                Ok(cp) => {
+                    unsafe { *out_params = Box::into_raw(cp) as *mut c_void };
+                    0
+                }
+                Err(code) => code,
+            }
+        },
+        libc::EINVAL as _,
+    )
 }
 
 /// Build the PA-PK-AS-REP response.
@@ -119,59 +161,88 @@ pub unsafe extern "C" fn heimdal_pkinit_mk_pa_reply(
         return libc::EINVAL as _;
     }
 
-    let cp = unsafe { &*(params as *const PkClientParams) };
+    let context_addr = context as usize;
+    let config_addr = config as usize;
+    let params_addr = params as usize;
+    let as_req_data_addr = as_req_data as usize;
+    let client_name_addr = client_name as usize;
+    let server_name_addr = server_name as usize;
+    let out_pa_data_addr = out_pa_data as usize;
+    let out_pa_len_addr = out_pa_len as usize;
+    let reply_key_addr = reply_key as usize;
 
-    let as_req_der = if as_req_data.is_null() || as_req_len == 0 {
-        &[]
-    } else {
-        unsafe { std::slice::from_raw_parts(as_req_data, as_req_len) }
-    };
+    catch_ffi_panic(
+        move || {
+            let context = context_addr as bindings::krb5_context;
+            let config = config_addr as *mut bindings::krb5_kdc_configuration;
+            let params = params_addr as *const c_void;
+            let as_req_data = as_req_data_addr as *const u8;
+            let client_name = client_name_addr as *const c_char;
+            let server_name = server_name_addr as *const c_char;
+            let out_pa_data = out_pa_data_addr as *mut *mut u8;
+            let out_pa_len = out_pa_len_addr as *mut usize;
+            let reply_key = reply_key_addr as *mut bindings::krb5_keyblock;
 
-    let c_client = if client_name.is_null() {
-        return libc::EINVAL as _;
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(client_name) }
-    };
-    let c_server = if server_name.is_null() {
-        return libc::EINVAL as _;
-    } else {
-        unsafe { std::ffi::CStr::from_ptr(server_name) }
-    };
+            let cp = unsafe { &*(params as *const PkClientParams) };
 
-    let client_str = c_client.to_str().unwrap_or("");
-    let server_str = c_server.to_str().unwrap_or("");
+            let as_req_der = if as_req_data.is_null() || as_req_len == 0 {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(as_req_data, as_req_len) }
+            };
 
-    match unsafe { kdc::build_reply(context, config, cp, nonce, enctype, as_req_der, client_str, server_str) } {
-        Ok((pa_rep_der, derived)) => {
-            // Allocate the PA-DATA buffer via libc::malloc so Heimdal can free it
-            let buf = unsafe { libc::malloc(pa_rep_der.len()) as *mut u8 };
-            if buf.is_null() {
-                return libc::ENOMEM as _;
+            let c_client = if client_name.is_null() {
+                return libc::EINVAL as _;
+            } else {
+                unsafe { std::ffi::CStr::from_ptr(client_name) }
+            };
+            let c_server = if server_name.is_null() {
+                return libc::EINVAL as _;
+            } else {
+                unsafe { std::ffi::CStr::from_ptr(server_name) }
+            };
+
+            let client_str = c_client.to_str().unwrap_or("");
+            let server_str = c_server.to_str().unwrap_or("");
+
+            match unsafe {
+                kdc::build_reply(
+                    context, config, cp, nonce, enctype, as_req_der, client_str, server_str,
+                )
+            } {
+                Ok((pa_rep_der, derived)) => {
+                    // Allocate the PA-DATA buffer via libc::malloc so Heimdal can free it
+                    let buf = unsafe { libc::malloc(pa_rep_der.len()) as *mut u8 };
+                    if buf.is_null() {
+                        return libc::ENOMEM as _;
+                    }
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(pa_rep_der.as_ptr(), buf, pa_rep_der.len());
+                        *out_pa_data = buf;
+                        *out_pa_len = pa_rep_der.len();
+                    }
+
+                    // Fill in the reply key
+                    let key_bytes = derived.key_data.as_ref();
+                    let key_buf = unsafe { libc::malloc(key_bytes.len()) as *mut u8 };
+                    if key_buf.is_null() {
+                        unsafe { libc::free(buf as *mut _) };
+                        return libc::ENOMEM as _;
+                    }
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), key_buf, key_bytes.len());
+                        (*reply_key).keytype = derived.enctype as _;
+                        (*reply_key).keyvalue.data = key_buf as *mut _;
+                        (*reply_key).keyvalue.length = key_bytes.len();
+                    }
+
+                    0
+                }
+                Err(code) => code,
             }
-            unsafe {
-                std::ptr::copy_nonoverlapping(pa_rep_der.as_ptr(), buf, pa_rep_der.len());
-                *out_pa_data = buf;
-                *out_pa_len = pa_rep_der.len();
-            }
-
-            // Fill in the reply key
-            let key_bytes = derived.key_data.as_ref();
-            let key_buf = unsafe { libc::malloc(key_bytes.len()) as *mut u8 };
-            if key_buf.is_null() {
-                unsafe { libc::free(buf as *mut _) };
-                return libc::ENOMEM as _;
-            }
-            unsafe {
-                std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), key_buf, key_bytes.len());
-                (*reply_key).keytype = derived.enctype as _;
-                (*reply_key).keyvalue.data = key_buf as *mut _;
-                (*reply_key).keyvalue.length = key_bytes.len();
-            }
-
-            0
-        }
-        Err(code) => code,
-    }
+        },
+        libc::EINVAL as _,
+    )
 }
 
 /// Check client certificate authorization.
@@ -330,41 +401,56 @@ pub unsafe extern "C" fn heimdal_pkinit_get_hint(
         *out_len = 0;
     }
 
-    let guard = crate::kdc::KDC_STATE.lock().unwrap();
-    let state = match guard.as_ref() {
-        Some(s) => s,
-        None => {
+    let context_addr = context as usize;
+    let config_addr = config as usize;
+    let out_data_addr = out_data as usize;
+    let out_len_addr = out_len as usize;
+
+    catch_ffi_panic(
+        move || {
+            let context = context_addr as bindings::krb5_context;
+            let config = config_addr as *mut bindings::krb5_kdc_configuration;
+            let out_data = out_data_addr as *mut *mut u8;
+            let out_len = out_len_addr as *mut usize;
+
+            let guard = crate::kdc::KDC_STATE.lock().unwrap_or_else(|e| e.into_inner());
+            let state = match guard.as_ref() {
+                Some(s) => s,
+                None => {
+                    crate::trace::pkinit_trace!(
+                        context, config,
+                        "PKINIT: get_hint called but KDC state not initialized"
+                    );
+                    return;
+                }
+            };
+
+            let hint_der = state.build_supported_algorithms_hint();
+            if hint_der.is_empty() {
+                crate::trace::pkinit_trace!(
+                    context, config,
+                    "PKINIT: get_hint returned empty (no KEM algorithms configured)"
+                );
+                return;
+            }
+
+            let buf = unsafe { libc::malloc(hint_der.len()) as *mut u8 };
+            if buf.is_null() {
+                return;
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(hint_der.as_ptr(), buf, hint_der.len());
+                *out_data = buf;
+                *out_len = hint_der.len();
+            }
             crate::trace::pkinit_trace!(
                 context, config,
-                "PKINIT: get_hint called but KDC state not initialized"
+                "PKINIT: get_hint returning {} bytes of KEM algorithm hint",
+                hint_der.len()
             );
-            return;
-        }
-    };
-
-    let hint_der = state.build_supported_algorithms_hint();
-    if hint_der.is_empty() {
-        crate::trace::pkinit_trace!(
-            context, config,
-            "PKINIT: get_hint returned empty (no KEM algorithms configured)"
-        );
-        return;
-    }
-
-    let buf = unsafe { libc::malloc(hint_der.len()) as *mut u8 };
-    if buf.is_null() {
-        return;
-    }
-    unsafe {
-        std::ptr::copy_nonoverlapping(hint_der.as_ptr(), buf, hint_der.len());
-        *out_data = buf;
-        *out_len = hint_der.len();
-    }
-    crate::trace::pkinit_trace!(
-        context, config,
-        "PKINIT: get_hint returning {} bytes of KEM algorithm hint",
-        hint_der.len()
-    );
+        },
+        (),
+    )
 }
 
 /// Check whether the verified request is anonymous PKINIT.

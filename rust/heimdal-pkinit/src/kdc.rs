@@ -120,7 +120,7 @@ pub(crate) unsafe fn initialize(
     // Log the KEM algorithms configured
     let kem_hint_len = state.build_supported_algorithms_hint().len();
 
-    let mut guard = KDC_STATE.lock().unwrap();
+    let mut guard = KDC_STATE.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(state);
     drop(guard);
 
@@ -151,7 +151,7 @@ pub(crate) unsafe fn verify_padata(
     current_time: i64,
     require_pqc: bool,
 ) -> Result<Box<PkClientParams>, bindings::krb5_error_code> {
-    let guard = KDC_STATE.lock().unwrap();
+    let guard = KDC_STATE.lock().unwrap_or_else(|e| e.into_inner());
     let state = guard.as_ref().ok_or(libc::EINVAL as bindings::krb5_error_code)?;
 
     let pa_slice = if pa_data.is_null() || pa_data_len == 0 {
@@ -220,7 +220,7 @@ pub(crate) unsafe fn build_reply(
     client_name: &str,
     server_name: &str,
 ) -> Result<(Vec<u8>, pkinit_core::crypto::kdf::DerivedKey), bindings::krb5_error_code> {
-    let guard = KDC_STATE.lock().unwrap();
+    let guard = KDC_STATE.lock().unwrap_or_else(|e| e.into_inner());
     let state = guard.as_ref().ok_or(libc::EINVAL as bindings::krb5_error_code)?;
 
     let o2k = unsafe { HeimdalOctetString2Key::new(context) };
