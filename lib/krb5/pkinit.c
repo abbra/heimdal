@@ -2622,6 +2622,16 @@ _krb5_get_init_creds_opt_free_pkinit(krb5_get_init_creds_opt *opt)
 
     if (opt->opt_private == NULL || opt->opt_private->pk_init_ctx == NULL)
 	return;
+
+#ifdef PKINIT_RUST
+    {
+	extern void _krb5_pk_free_rust_ctx(void *);
+	_krb5_pk_free_rust_ctx(opt->opt_private->pk_init_ctx);
+	opt->opt_private->pk_init_ctx = NULL;
+	return;
+    }
+#endif
+
     ctx = opt->opt_private->pk_init_ctx;
     switch (ctx->keyex) {
     case USE_DH:
@@ -2837,6 +2847,43 @@ krb5_get_init_creds_opt_set_pkinit(krb5_context context,
 	    return EINVAL;
 	}
     }
+
+#ifdef PKINIT_RUST
+    /*
+     * Create the Rust pkinit-core client context alongside the C one.
+     * The Rust context is stored in the ->anonymous field's address space;
+     * the _rust() functions receive it via the same void *c parameter.
+     *
+     * For now, we create the Rust context and store it as the pk_init_ctx
+     * itself.  The C struct fields (keyex, type, etc.) are only used by
+     * the C code path; the Rust path ignores them.
+     *
+     * TODO: In a future cleanup, split pk_init_ctx into a union with
+     * a Rust-only and C-only variant.
+     */
+    {
+	extern void *_krb5_pk_init_rust_ctx(krb5_context, krb5_principal,
+					   const char *, const char *, int);
+	void *rust_ctx = _krb5_pk_init_rust_ctx(context, principal,
+						user_id, x509_anchors,
+						(flags & KRB5_GIC_OPT_PKINIT_ANONYMOUS) != 0);
+	if (rust_ctx == NULL) {
+	    /*
+	     * Non-fatal: fall back to the C code path.
+	     * The _rust() functions will see pk_init_ctx is the C struct
+	     * and work with it (the opaque handle is just a pointer).
+	     */
+	    _krb5_debug(context, 1, "PKINIT(rust): failed to init rust context, using C fallback");
+	} else {
+	    /*
+	     * Replace pk_init_ctx with the Rust handle.
+	     * Free the C struct we allocated above.
+	     */
+	    free(opt->opt_private->pk_init_ctx);
+	    opt->opt_private->pk_init_ctx = (krb5_pk_init_ctx)rust_ctx;
+	}
+    }
+#endif /* PKINIT_RUST */
 
     return 0;
 }

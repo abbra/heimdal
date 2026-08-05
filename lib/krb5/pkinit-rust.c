@@ -173,5 +173,75 @@ _krb5_pk_rd_pa_reply_rust(krb5_context context,
     return 0;
 }
 
+/*
+ * Initialize a Rust PKINIT client context.
+ *
+ * Called from krb5_get_init_creds_opt_set_pkinit() when PKINIT_RUST
+ * is defined.  Creates the Rust opaque handle and stores it so that
+ * the pkinit_step() code path can pass it to the _rust() variants.
+ *
+ * Returns the opaque handle, or NULL on failure.
+ */
+void *
+_krb5_pk_init_rust_ctx(krb5_context context,
+		       krb5_principal principal,
+		       const char *user_id,
+		       const char *x509_anchors,
+		       int anonymous)
+{
+    void *rust_ctx = NULL;
+    krb5_error_code ret;
+    const char *anchors_arr[2];
+    size_t n_anchors = 0;
+    char *server_name = NULL;
+
+    if (x509_anchors) {
+	/* Strip "FILE:" prefix if present */
+	if (strncmp(x509_anchors, "FILE:", 5) == 0)
+	    anchors_arr[0] = x509_anchors + 5;
+	else
+	    anchors_arr[0] = x509_anchors;
+	n_anchors = 1;
+    }
+    anchors_arr[n_anchors] = NULL;
+
+    if (principal) {
+	krb5_principal krbtgt = NULL;
+	const char *realm = krb5_principal_get_realm(context, principal);
+
+	ret = krb5_make_principal(context, &krbtgt, realm,
+				 KRB5_TGS_NAME, realm, NULL);
+	if (ret == 0) {
+	    krb5_unparse_name(context, krbtgt, &server_name);
+	    krb5_free_principal(context, krbtgt);
+	}
+    }
+
+    ret = heimdal_pkinit_client_init(context,
+				     user_id ? user_id : "",
+				     anchors_arr,
+				     n_anchors,
+				     anonymous,
+				     server_name,
+				     &rust_ctx);
+    free(server_name);
+    if (ret) {
+	krb5_set_error_message(context, ret,
+			       "PKINIT(rust): failed to initialize client context");
+	return NULL;
+    }
+
+    return rust_ctx;
+}
+
+/*
+ * Free a Rust PKINIT client context.
+ */
+void
+_krb5_pk_free_rust_ctx(void *rust_ctx)
+{
+    heimdal_pkinit_client_free(rust_ctx);
+}
+
 #endif /* PKINIT_RUST */
 #endif /* PKINIT */
