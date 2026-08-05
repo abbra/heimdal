@@ -50,6 +50,8 @@ fn main() {
         .allowlist_function("krb5_unparse_name")
         .allowlist_function("krb5_free_unparsed_name")
         .allowlist_function("krb5_config_get_string")
+        .allowlist_function("krb5_config_get_strings")
+        .allowlist_function("krb5_config_free_strings")
         .allowlist_function("krb5_config_get_bool_default")
         .allowlist_function("krb5_config_get_int_default")
         .allowlist_function("krb5_set_error_message")

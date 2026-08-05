@@ -90,6 +90,24 @@ pub(crate) unsafe fn initialize(
             return libc::EINVAL as _;
         }
     }
+    for revoke_source in &kdc_config.crls {
+        if let Err(e) = trust_store.load_from_path(revoke_source) {
+            pkinit_trace!(
+                context, config,
+                "PKINIT: failed to load pkinit_revoke source '{}': {}", revoke_source, e
+            );
+            return libc::EINVAL as _;
+        }
+    }
+    if kdc_config.require_crl_checking {
+        pkinit_trace!(
+            context, config,
+            "PKINIT: CRL checking enabled ({} pkinit_revoke source(s) loaded)",
+            kdc_config.crls.len()
+        );
+    }
+    // NOTE: pkinit_kdc_ocsp is intentionally not read here — pkinit-core's
+    // RevocationChecks only supports CRL-based revocation today, not OCSP.
 
     let state = match PkinitKdcState::new(identity, trust_store, kdc_config) {
         Ok(s) => s,

@@ -31,6 +31,18 @@ pub(crate) unsafe fn read_kdc_config(
         kdc_config.anchors.push(v);
     }
 
+    // pkinit_pool (intermediate certificates, admin may repeat the key)
+    for v in unsafe { read_config_strings(context, &["kdc", "pkinit_pool"]) } {
+        kdc_config.intermediates.push(v);
+    }
+
+    // pkinit_revoke (CRL / revocation bundle sources, admin may repeat)
+    let revoke_sources = unsafe { read_config_strings(context, &["kdc", "pkinit_revoke"]) };
+    if !revoke_sources.is_empty() {
+        kdc_config.crls = revoke_sources;
+        kdc_config.require_crl_checking = true;
+    }
+
     // pkinit_dh_min_bits
     let dh_min = unsafe { read_config_int(context, &["kdc", "pkinit_dh_min_bits"], 2048) };
     kdc_config.dh_min_bits = dh_min as u32;
@@ -140,6 +152,57 @@ pub(crate) unsafe fn read_config_string(
         }
         _ => None,
     }
+}
+
+/// Read a multi-valued string relation (e.g. `pkinit_pool`, `pkinit_revoke`,
+/// which admins may repeat) from Heimdal's config. Only 2-element paths
+/// (`["kdc", "pkinit_pool"]`) are supported, matching the existing
+/// `read_config_string` helper's scope.
+///
+/// # Safety
+///
+/// `context` must be valid.
+pub(crate) unsafe fn read_config_strings(
+    context: bindings::krb5_context,
+    path: &[&str; 2],
+) -> Vec<String> {
+    let Ok(c0) = std::ffi::CString::new(path[0]) else {
+        return Vec::new();
+    };
+    let Ok(c1) = std::ffi::CString::new(path[1]) else {
+        return Vec::new();
+    };
+
+    let values = unsafe {
+        bindings::krb5_config_get_strings(
+            context,
+            std::ptr::null(),
+            c0.as_ptr(),
+            c1.as_ptr(),
+            std::ptr::null::<std::ffi::c_char>(),
+        )
+    };
+    if values.is_null() {
+        return Vec::new();
+    }
+
+    let mut result = Vec::new();
+    let mut i = 0isize;
+    loop {
+        // SAFETY: krb5_config_get_strings returns a NULL-terminated array
+        // of NUL-terminated C strings; we stop at the first NULL entry
+        // before ever reading past the allocation.
+        let entry = unsafe { *values.offset(i) };
+        if entry.is_null() {
+            break;
+        }
+        if let Ok(s) = unsafe { std::ffi::CStr::from_ptr(entry) }.to_str() {
+            result.push(s.to_string());
+        }
+        i += 1;
+    }
+    unsafe { bindings::krb5_config_free_strings(values) };
+    result
 }
 
 /// Read an integer value from Heimdal's config with a default.
