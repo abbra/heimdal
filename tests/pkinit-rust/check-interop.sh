@@ -199,6 +199,21 @@ testsuccess "PKI generated (realm=$CERT_REALM)"
 KDC_PORT=$(free_port)
 CCACHE="$WORKDIR/ccache"
 
+# Set up MIT plugin directory with system plugins symlinked
+# This prevents MIT from loading its own pkinit.so alongside ours
+MIT_PLUGIN_DIR="$WORKDIR/plugins"
+mkdir -p "$MIT_PLUGIN_DIR/preauth"
+for sys_dir in /usr/lib64/krb5/plugins/preauth /usr/lib/krb5/plugins/preauth; do
+    if [ -d "$sys_dir" ]; then
+        for so in "$sys_dir"/*.so; do
+            name=$(basename "$so")
+            [ "$name" = "pkinit.so" ] && continue
+            ln -sf "$so" "$MIT_PLUGIN_DIR/preauth/$name" 2>/dev/null || true
+        done
+        break
+    fi
+done
+
 # ── Heimdal KDC setup ────────────────────────────────────────────────
 
 setup_heimdal_kdc() {
@@ -280,7 +295,13 @@ ${pqc_opts}
     database_name = ${WORKDIR}/mit-db/principal
 
 [plugins]
-    preauth = {
+    clpreauth = {
+        module = pkinit:${KURBU5_SO}
+    }
+    kdcpreauth = {
+        module = pkinit:${KURBU5_SO}
+    }
+    certauth = {
         module = pkinit:${KURBU5_SO}
 
     }
@@ -305,7 +326,13 @@ ${pqc_opts}
     }
 
 [plugins]
-    preauth = {
+    clpreauth = {
+        module = pkinit:${KURBU5_SO}
+    }
+    kdcpreauth = {
+        module = pkinit:${KURBU5_SO}
+    }
+    certauth = {
         module = pkinit:${KURBU5_SO}
 
     }
@@ -429,6 +456,7 @@ if [ -n "$KDC_PID" ]; then
     dns_lookup_kdc = false
     dns_lookup_realm = false
     pkinit_anchors = FILE:${PKI_DIR}/ca.pem
+    plugin_base_dir = ${MIT_PLUGIN_DIR}
 
 [realms]
     ${REALM} = {
@@ -436,7 +464,13 @@ if [ -n "$KDC_PID" ]; then
     }
 
 [plugins]
-    preauth = {
+    clpreauth = {
+        module = pkinit:${KURBU5_SO}
+    }
+    kdcpreauth = {
+        module = pkinit:${KURBU5_SO}
+    }
+    certauth = {
         module = pkinit:${KURBU5_SO}
     }
 CONF
@@ -569,6 +603,7 @@ if [ -n "$KDC_PID" ]; then
     dns_lookup_kdc = false
     dns_lookup_realm = false
     pkinit_anchors = FILE:${PKI_DIR}/ca.pem
+    plugin_base_dir = ${MIT_PLUGIN_DIR}
     pkinit_pqc_min_algorithm = ML-KEM-768
 
 [realms]
@@ -577,7 +612,13 @@ if [ -n "$KDC_PID" ]; then
     }
 
 [plugins]
-    preauth = {
+    clpreauth = {
+        module = pkinit:${KURBU5_SO}
+    }
+    kdcpreauth = {
+        module = pkinit:${KURBU5_SO}
+    }
+    certauth = {
         module = pkinit:${KURBU5_SO}
     }
 CONF
@@ -607,6 +648,7 @@ if [ -n "$KDC_PID" ]; then
     dns_lookup_kdc = false
     dns_lookup_realm = false
     pkinit_anchors = FILE:${PKI_DIR}/ca.pem
+    plugin_base_dir = ${MIT_PLUGIN_DIR}
 
 [realms]
     ${REALM} = {
@@ -614,7 +656,13 @@ if [ -n "$KDC_PID" ]; then
     }
 
 [plugins]
-    preauth = {
+    clpreauth = {
+        module = pkinit:${KURBU5_SO}
+    }
+    kdcpreauth = {
+        module = pkinit:${KURBU5_SO}
+    }
+    certauth = {
         module = pkinit:${KURBU5_SO}
     }
 CONF
