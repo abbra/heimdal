@@ -555,22 +555,31 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 	if (ret == KRB5_KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED) {
 	    /*
 	     * PQC enforcement: the client used classical DH/ECDH but
-	     * this KDC requires post-quantum key exchange.  Return
-	     * TD-DH-PARAMETERS with the KDC's accepted algorithms
-	     * so the client can retry with ML-KEM.
+	     * this KDC requires post-quantum key exchange.  Attach
+	     * TD-DH-PARAMETERS with the KDC's accepted algorithms to
+	     * the KRB-ERROR's typed data so the client can retry with
+	     * ML-KEM.  r->rep.padata is what _kdc_fast_mk_error() (see
+	     * the tail of _kdc_as_rep) serializes as the error's e-data,
+	     * the same mechanism used for KRB5_PADATA_PK_AS_REP a few
+	     * lines below in this same function.
 	     */
 	    unsigned char *td_data = NULL;
 	    size_t td_len = 0;
+	    krb5_error_code td_ret;
 
 	    heimdal_pkinit_get_hint(r->context, r->config,
 				    &td_data, &td_len);
 	    if (td_data && td_len > 0) {
-		PA_DATA td_pa;
-		td_pa.padata_type = td_dh_parameters;
-		td_pa.padata_value.data = td_data;
-		td_pa.padata_value.length = td_len;
-		/* The error will carry the typed data */
-		free(td_data);
+		td_ret = krb5_padata_add(r->context, r->rep.padata,
+					 td_dh_parameters, td_data, td_len);
+		if (td_ret) {
+		    /*
+		     * Non-fatal: the client just won't get the retry
+		     * hint on this response. Ownership of td_data only
+		     * transfers to r->rep.padata on success.
+		     */
+		    free(td_data);
+		}
 	    }
 	    _kdc_r_log(r, 4,
 		       "PKINIT: PQC required but client used classical key exchange -- %s",
