@@ -3,14 +3,9 @@
 //! `kdc_log` is only available in the KDC process, not in `libkrb5`.
 //! Since this static library links into both, we use a C callback
 //! function pointer that the KDC side sets at init time.  When
-//! running client-side, the pointer stays NULL and tracing is a no-op.
+//! running client-side, the cell stays unset and tracing is a no-op.
 
 use crate::bindings;
-
-/// C-callable trace function pointer.  Set by `heimdal_pkinit_initialize`
-/// on the KDC side.  NULL on the client side (tracing disabled).
-static TRACE_FN: std::sync::atomic::AtomicPtr<()> =
-    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
 /// Signature of the trace callback (matches a simplified kdc_log).
 type TraceFn = unsafe extern "C" fn(
@@ -20,12 +15,24 @@ type TraceFn = unsafe extern "C" fn(
     *const std::ffi::c_char,
 );
 
-/// Register the trace callback.  Called once from `kdc::initialize`.
+/// C-callable trace function pointer. Set once by
+/// `heimdal_pkinit_initialize` on the KDC side. Unset on the client side
+/// (tracing disabled). Function pointers are `Copy + Send + Sync`, so
+/// `OnceLock` stores this with zero `unsafe` (unlike the previous
+/// `AtomicPtr<()>` + `mem::transmute` approach, which relied on data
+/// pointers and function pointers sharing representation — true on every
+/// platform this crate targets, but not guaranteed by the language).
+static TRACE_FN: std::sync::OnceLock<TraceFn> = std::sync::OnceLock::new();
+
+/// Register the trace callback. Called once from `kdc::initialize`.
 pub(crate) fn set_trace_fn(f: TraceFn) {
-    TRACE_FN.store(f as *mut (), std::sync::atomic::Ordering::Release);
+    // Matches the previous AtomicPtr::store's overwrite-once-per-process
+    // semantics closely enough for this crate's single-KDC-init use case;
+    // a second call is a no-op rather than an error.
+    let _ = TRACE_FN.set(f);
 }
 
-/// Log a PKINIT message.  No-op when the trace callback is unset.
+/// Log a PKINIT message. No-op when the trace callback is unset.
 ///
 /// # Safety
 ///
@@ -36,15 +43,17 @@ pub(crate) unsafe fn kdc_trace(
     level: i32,
     msg: &str,
 ) {
-    let ptr = TRACE_FN.load(std::sync::atomic::Ordering::Acquire);
-    if ptr.is_null() {
+    let Some(&f) = TRACE_FN.get() else {
         return;
-    }
+    };
 
     let Ok(cmsg) = std::ffi::CString::new(msg) else {
         return;
     };
-    let f: TraceFn = unsafe { std::mem::transmute(ptr) };
+    // SAFETY: `f` was registered via set_trace_fn by the KDC's
+    // pkinit-rust.c shim with the exact signature declared above;
+    // context/config are the caller's responsibility per this function's
+    // own `# Safety` contract.
     unsafe { f(context, config, level as _, cmsg.as_ptr()) };
 }
 

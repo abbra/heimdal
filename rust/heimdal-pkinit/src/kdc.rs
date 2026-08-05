@@ -4,7 +4,7 @@
 //! (`_kdc_pk_rd_padata`, `_kdc_pk_mk_pa_reply`, etc.) by delegating to
 //! `pkinit-core`'s `PkinitKdcState`.
 
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 use pkinit_core::config::PkinitKdcConfig;
 use pkinit_core::identity::{PkinitIdentity, TrustStore};
@@ -28,9 +28,11 @@ pub struct PkClientParams {
 /// Global KDC PKINIT state, initialized once by `_kdc_pk_initialize`.
 ///
 /// Heimdal's original code uses file-level statics (`kdc_identity`,
-/// `moduli`, `principal_mappings`).  We mirror that pattern with a
-/// `Mutex`-protected option.
-pub(crate) static KDC_STATE: Mutex<Option<PkinitKdcState>> = Mutex::new(None);
+/// `moduli`, `principal_mappings`).  We mirror that pattern with an
+/// `RwLock`-protected option — this is written once at startup and read
+/// on every subsequent PKINIT request, so readers should not contend with
+/// each other the way an exclusive `Mutex` would force them to.
+pub(crate) static KDC_STATE: RwLock<Option<PkinitKdcState>> = RwLock::new(None);
 
 /// Initialize the KDC PKINIT subsystem.
 ///
@@ -117,7 +119,7 @@ pub(crate) unsafe fn initialize(
     // Log the KEM algorithms configured
     let kem_hint_len = state.build_supported_algorithms_hint().len();
 
-    let mut guard = KDC_STATE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = KDC_STATE.write().unwrap_or_else(|e| e.into_inner());
     *guard = Some(state);
     drop(guard);
 
@@ -148,7 +150,7 @@ pub(crate) unsafe fn verify_padata(
     current_time: i64,
     require_pqc: bool,
 ) -> Result<Box<PkClientParams>, bindings::krb5_error_code> {
-    let guard = KDC_STATE.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = KDC_STATE.read().unwrap_or_else(|e| e.into_inner());
     let state = guard.as_ref().ok_or(libc::EINVAL as bindings::krb5_error_code)?;
 
     let pa_slice = if pa_data.is_null() || pa_data_len == 0 {
@@ -227,7 +229,7 @@ pub(crate) unsafe fn build_reply(
     client_name: &str,
     server_name: &str,
 ) -> Result<(Vec<u8>, pkinit_core::crypto::kdf::DerivedKey), bindings::krb5_error_code> {
-    let guard = KDC_STATE.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = KDC_STATE.read().unwrap_or_else(|e| e.into_inner());
     let state = guard.as_ref().ok_or(libc::EINVAL as bindings::krb5_error_code)?;
 
     let o2k = unsafe { HeimdalOctetString2Key::new(context) };

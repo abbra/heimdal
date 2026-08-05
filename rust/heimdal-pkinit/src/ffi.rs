@@ -432,7 +432,7 @@ pub unsafe extern "C" fn heimdal_pkinit_get_hint(
             let out_data = out_data_addr as *mut *mut u8;
             let out_len = out_len_addr as *mut usize;
 
-            let guard = crate::kdc::KDC_STATE.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = crate::kdc::KDC_STATE.read().unwrap_or_else(|e| e.into_inner());
             let state = match guard.as_ref() {
                 Some(s) => s,
                 None => {
