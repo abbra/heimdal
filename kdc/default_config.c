@@ -415,7 +415,15 @@ krb5_kdc_pkinit_config(krb5_context context, krb5_kdc_configuration *config)
 
 #ifdef PKINIT_RUST
 	heimdal_pkinit_set_trace(pkinit_rust_trace);
-	heimdal_pkinit_initialize(context, config);
+	{
+	    krb5_error_code rust_ret = heimdal_pkinit_initialize(context, config);
+	    if (rust_ret) {
+		kdc_log(context, config, 0,
+			"PKINIT(rust): initialization failed (%d); "
+			"disabling PKINIT", rust_ret);
+		config->enable_pkinit = 0;
+	    }
+	}
 #else
 	krb5_kdc_pk_initialize(context, config,
 			       config->pkinit_kdc_identity,
