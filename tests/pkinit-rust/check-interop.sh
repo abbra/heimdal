@@ -279,6 +279,12 @@ ${pqc_opts}
 [dbdefaults]
     database_name = ${WORKDIR}/mit-db/principal
 
+[plugins]
+    preauth = {
+        module = pkinit:${KURBU5_SO}
+
+    }
+
 [logging]
     kdc = FILE:${WORKDIR}/kdc.log
 CONF
@@ -296,6 +302,12 @@ CONF
         pkinit_identity = FILE:${PKI_DIR}/kdc.pem,${PKI_DIR}/kdc.key
         pkinit_anchors = FILE:${PKI_DIR}/ca.pem
 ${pqc_opts}
+    }
+
+[plugins]
+    preauth = {
+        module = pkinit:${KURBU5_SO}
+
     }
 
 [logging]
@@ -317,14 +329,9 @@ CONF
             2>>"$WORKDIR/mit-kdb.log" || true
     fi
 
-    # Setup plugin dir
-    mkdir -p "$WORKDIR/mit-plugins/preauth"
-    ln -sf "$KURBU5_SO" "$WORKDIR/mit-plugins/preauth/pkinit.so"
-
     > "$WORKDIR/kdc.log"
     KRB5_KDC_PROFILE="$WORKDIR/mit-kdc.conf" \
     KRB5_CONFIG="$WORKDIR/mit-krb5.conf" \
-    KRB5_PLUGIN_DIR="$WORKDIR/mit-plugins" \
         "$M_KDC" -n 2>>"$WORKDIR/kdc.log" &
     KDC_PID=$!
     sleep 1
@@ -364,7 +371,6 @@ run_mit_kinit() {
     > "$WORKDIR/kdc.log"
 
     if KRB5_CONFIG="$conf" \
-       KRB5_PLUGIN_DIR="$WORKDIR/mit-plugins" \
        "$M_KINIT" \
         -X "X509_user_identity=FILE:${PKI_DIR}/client.pem,${PKI_DIR}/client.key" \
         -X "X509_anchors=FILE:${PKI_DIR}/ca.pem" \
@@ -484,21 +490,68 @@ fi
 
 # ══════════════════════════════════════════════════════════════════════
 # Test 4: MIT KDC (kurbu5-pkinit) ← MIT kinit (kurbu5-pkinit)
+#         Uses kurbu5-pkinit's own test infrastructure for proper
+#         MIT plugin loading (kdcpreauth + clpreauth + certauth).
 # ══════════════════════════════════════════════════════════════════════
 
 echo ""
 echo "=== Test 4: MIT KDC (kurbu5-pkinit) ←→ MIT kinit (kurbu5-pkinit) ==="
 
-if [ -x "$M_KDC" ] && [ -x "$M_KADMIN" ]; then
-    setup_mit_kdc
-    if [ -n "$KDC_PID" ] && kill -0 "$KDC_PID" 2>/dev/null; then
-        run_mit_kinit "MIT(kurbu5)→MIT KDC(kurbu5)" "$WORKDIR/mit-krb5.conf" || true
-        stop_kdc
+SETUP_PY="$KURBU5_DIR/tests/system/pkinit/setup.py"
+if [ -x "$M_KDC" ] && [ -f "$SETUP_PY" ]; then
+    MIT_TEST_DIR="$WORKDIR/mit-test4"
+    MIT_ENV="$MIT_TEST_DIR/env.sh"
+    MIT_PORT=$((KDC_PORT + 100))
+
+    python3 "$SETUP_PY" \
+        --testdir "$MIT_TEST_DIR/kdc" \
+        --portbase "$MIT_PORT" \
+        --realm "$REALM" \
+        --principal "$CLIENT" \
+        --plugin-so "$KURBU5_SO" \
+        --env-file "$MIT_ENV" &
+    MIT_SETUP_PID=$!
+
+    # Wait for env file
+    for i in $(seq 1 30); do
+        [ -f "$MIT_ENV" ] && break
+        kill -0 "$MIT_SETUP_PID" 2>/dev/null || break
+        sleep 0.5
+    done
+
+    if [ -f "$MIT_ENV" ]; then
+        # Source the env and run kinit
+        (
+            source "$MIT_ENV"
+            if /usr/bin/kinit \
+                -X "X509_user_identity=FILE:${PKINIT_CLIENT_CERT},${PKINIT_CLIENT_KEY}" \
+                "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" </dev/null 2>"$WORKDIR/kinit-t4-err.log"; then
+                echo "PASS"
+            else
+                echo "FAIL"
+            fi
+        ) | read -r T4_RESULT || T4_RESULT="FAIL"
+        T4_RESULT=$(source "$MIT_ENV" && /usr/bin/kinit \
+            -X "X509_user_identity=FILE:${PKINIT_CLIENT_CERT},${PKINIT_CLIENT_KEY}" \
+            "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" </dev/null 2>"$WORKDIR/kinit-t4-err.log" && echo PASS || echo FAIL)
+        if [ "$T4_RESULT" = "PASS" ]; then
+            testsuccess "MIT(kurbu5)→MIT KDC(kurbu5)"
+        else
+            testfailed "MIT(kurbu5)→MIT KDC(kurbu5)"
+            [ "${VERBOSE:-0}" = "1" ] && cat "$WORKDIR/kinit-t4-err.log" 2>/dev/null
+        fi
     else
-        testfailed "MIT KDC failed to start"
+        testfailed "MIT KDC setup.py did not produce env file"
     fi
+
+    kill "$MIT_SETUP_PID" 2>/dev/null || true
+    wait "$MIT_SETUP_PID" 2>/dev/null || true
 else
-    testskip "MIT KDC (krb5kdc not found)"
+    if [ ! -f "$SETUP_PY" ]; then
+        testskip "kurbu5-pkinit setup.py not found at $SETUP_PY"
+    else
+        testskip "MIT KDC (krb5kdc not found)"
+    fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════
@@ -569,7 +622,6 @@ CONF
     echo "  Testing: MIT kinit (classical) → PQC-enforcing Heimdal KDC"
     > "$WORKDIR/kdc.log"
     if KRB5_CONFIG="$WORKDIR/mit-nopqc-client.conf" \
-       KRB5_PLUGIN_DIR="$WORKDIR/mit-plugins" \
        KRB5CCNAME="FILE:$CCACHE" \
        "$M_KINIT" \
         -X "X509_user_identity=FILE:${PKI_DIR}/client.pem,${PKI_DIR}/client.key" \
