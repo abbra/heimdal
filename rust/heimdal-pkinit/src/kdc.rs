@@ -14,9 +14,6 @@ use crate::bindings;
 use crate::o2k::HeimdalOctetString2Key;
 use crate::trace::pkinit_trace;
 
-/// `KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED` / error 65.
-/// Used when the KDC rejects the client's key exchange parameters.
-const KRB5KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED: bindings::krb5_error_code = -1765328319;
 
 /// Opaque state passed between `_kdc_pk_rd_padata` and `_kdc_pk_mk_pa_reply`.
 ///
@@ -177,7 +174,8 @@ pub(crate) unsafe fn verify_padata(
                             context, config,
                             "PKINIT: rejecting classical DH — PQC required"
                         );
-                        return Err(KRB5KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED);
+                        return Err(bindings::KRB5_KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED
+                            as bindings::krb5_error_code);
                     }
                     pkinit_core::server::KeyExchangeType::Kem(_) => {
                         // KEM is acceptable
@@ -195,7 +193,16 @@ pub(crate) unsafe fn verify_padata(
                 context, config,
                 "PKINIT: AS-REQ verification failed: {}", e
             );
-            Err(libc::EINVAL as _)
+            use pkinit_core::error::KemErrorClass;
+            let code = match e.kem_error_class() {
+                KemErrorClass::EphemeralKeyParamsNotAccepted => {
+                    bindings::KRB5_KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED
+                }
+                KemErrorClass::NoAcceptableKdf => bindings::KRB5_KDC_ERR_NO_ACCEPTABLE_KDF,
+                KemErrorClass::PreauthFailed => bindings::KRB5KDC_ERR_PREAUTH_FAILED,
+                KemErrorClass::Other => libc::EINVAL,
+            };
+            Err(code as bindings::krb5_error_code)
         }
     }
 }
