@@ -339,6 +339,24 @@ pub unsafe extern "C" fn heimdal_pkinit_get_hint(
     );
 }
 
+/// Check whether the verified request is anonymous PKINIT.
+///
+/// Returns 1 if anonymous, 0 otherwise.
+///
+/// # Safety
+///
+/// `params` must be a valid pointer from `heimdal_pkinit_rd_padata`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn heimdal_pkinit_is_anonymous(
+    params: *const c_void,
+) -> i32 {
+    if params.is_null() {
+        return 0;
+    }
+    let cp = unsafe { &*(params as *const PkClientParams) };
+    if cp.verified.is_anonymous { 1 } else { 0 }
+}
+
 // ─── Client-side FFI ─────────────────────────────────────────────────────
 
 /// Create a new client PKINIT context.

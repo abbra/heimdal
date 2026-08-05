@@ -630,6 +630,102 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 	    free(pa_rep_data);
 	    goto out;
 	}
+
+	/*
+	 * PA-PKINIT-KX (RFC 6112): strengthen the session key by
+	 * mixing in a KDC-generated random contribution via FX-CF2.
+	 * This is required for anonymous PKINIT and recommended for
+	 * all DH/ECDH/KEM exchanges.
+	 */
+	{
+	    krb5_keyblock kdc_contribution;
+	    krb5_crypto reply_crypto = NULL;
+	    krb5_crypto kdccont_crypto = NULL;
+
+	    ret = krb5_generate_random_keyblock(r->context,
+						 r->sessionetype,
+						 &kdc_contribution);
+	    if (ret)
+		goto out;
+
+	    ret = krb5_crypto_init(r->context, &r->reply_key, 0,
+				    &reply_crypto);
+	    if (ret) {
+		krb5_free_keyblock_contents(r->context, &kdc_contribution);
+		goto out;
+	    }
+
+	    ret = krb5_crypto_init(r->context, &kdc_contribution,
+				    r->sessionetype, &kdccont_crypto);
+	    if (ret) {
+		krb5_crypto_destroy(r->context, reply_crypto);
+		krb5_free_keyblock_contents(r->context, &kdc_contribution);
+		goto out;
+	    }
+
+	    /* session_key = FX-CF2(kdc_contribution, reply_key,
+	     *                      "PKINIT", "KEYEXCHANGE") */
+	    {
+		krb5_data p1 = { 6, rk_UNCONST("PKINIT") };
+		krb5_data p2 = { 11, rk_UNCONST("KEYEXCHANGE") };
+
+		ret = krb5_crypto_fx_cf2(r->context,
+					 kdccont_crypto, reply_crypto,
+					 &p1, &p2,
+					 r->sessionetype,
+					 &r->session_key);
+	    }
+	    krb5_crypto_destroy(r->context, kdccont_crypto);
+
+	    if (ret) {
+		krb5_crypto_destroy(r->context, reply_crypto);
+		krb5_free_keyblock_contents(r->context, &kdc_contribution);
+		goto out;
+	    }
+
+	    /* Encrypt kdc_contribution with the reply key and send as
+	     * PA-PKINIT-KX so the client can derive the same session key */
+	    {
+		void *kck_data = NULL;
+		size_t kck_len = 0, kck_size;
+		EncryptedData kx;
+		void *kx_data = NULL;
+		size_t kx_len = 0, kx_size;
+
+		ASN1_MALLOC_ENCODE(EncryptionKey, kck_data, kck_len,
+				   &kdc_contribution, &kck_size, ret);
+		krb5_free_keyblock_contents(r->context, &kdc_contribution);
+		if (ret || kck_len != kck_size) {
+		    krb5_crypto_destroy(r->context, reply_crypto);
+		    free(kck_data);
+		    goto out;
+		}
+
+		ret = krb5_encrypt_EncryptedData(r->context, reply_crypto,
+						 KRB5_KU_PA_PKINIT_KX,
+						 kck_data, kck_len, 0, &kx);
+		krb5_crypto_destroy(r->context, reply_crypto);
+		free(kck_data);
+		if (ret)
+		    goto out;
+
+		ASN1_MALLOC_ENCODE(EncryptedData, kx_data, kx_len,
+				   &kx, &kx_size, ret);
+		free_EncryptedData(&kx);
+		if (ret || kx_len != kx_size) {
+		    free(kx_data);
+		    goto out;
+		}
+
+		ret = krb5_padata_add(r->context, r->rep.padata,
+				      KRB5_PADATA_PKINIT_KX,
+				      kx_data, kx_len);
+		if (ret) {
+		    free(kx_data);
+		    goto out;
+		}
+	    }
+	}
     }
 
     kdc_audit_setkv_number((kdc_request_t)r, KDC_REQUEST_KV_AUTH_EVENT,

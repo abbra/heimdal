@@ -119,6 +119,13 @@ heimdal_pkinit_keyex_name(const void *params,
                           const char **out_name);
 
 /*
+ * Check whether the verified request is anonymous PKINIT.
+ * Returns 1 if anonymous, 0 otherwise.
+ */
+int
+heimdal_pkinit_is_anonymous(const void *params);
+
+/*
  * Return the KEM algorithm hint for proactive advertisement.
  * The hint is a DER-encoded PA-PK-AS-REQ-Hint containing the KDC's
  * supported KEM algorithms.
