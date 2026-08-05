@@ -183,10 +183,22 @@ endif
 
 if PKINIT_RUST
 AM_CPPFLAGS += -DPKINIT_RUST -I$(top_srcdir)/rust/heimdal-pkinit/include
+# libkrb5.so's version-script.map does not export the internal
+# heimdal_pkinit_* symbols (they are not part of krb5's public ABI), so
+# libkdc.so cannot resolve them transitively through its libkrb5.la
+# dependency and must link the archive directly, same as libkrb5.la does.
+LIB_pkinit_rust = $(top_srcdir)/rust/target/release/libheimdal_pkinit.a -lssl $(LIB_openssl_crypto) $(PTHREAD_LIBADD) -ldl -lm
+libkdc_la_DEPENDENCIES = $(top_srcdir)/rust/target/release/libheimdal_pkinit.a
+
+$(top_srcdir)/rust/target/release/libheimdal_pkinit.a: FORCE
+	$(MAKE) -C $(top_srcdir)/rust all
+
+.PHONY: FORCE
 endif
 
 libkdc_la_LIBADD = \
 	$(LIB_pkinit) \
+	$(LIB_pkinit_rust) \
 	$(top_builddir)/lib/hdb/libhdb.la \
 	$(top_builddir)/lib/krb5/libkrb5.la \
 	$(top_builddir)/lib/gssapi/libgssapi.la \
