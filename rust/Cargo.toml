@@ -1,0 +1,3 @@
+[workspace]
+members = ["heimdal-pkinit"]
+resolver = "3"

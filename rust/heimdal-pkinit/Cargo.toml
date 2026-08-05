@@ -1,0 +1,17 @@
+[package]
+name = "heimdal-pkinit"
+version = "0.1.0"
+edition = "2024"
+license = "BSD-3-Clause"
+description = "PKINIT pre-authentication with post-quantum extensions for Heimdal Kerberos"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+pkinit-core = { git = "https://github.com/abbra/kurbu5-pkinit.git", branch = "main" }
+libc = "0.2"
+native-ossl = "0.2"
+
+[build-dependencies]
+bindgen = "0.71"
