@@ -1,3 +1,10 @@
+// Copyright (c) 2025 Red Hat, Inc.
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the conditions in the
+// accompanying LICENSE file are met.
+
 //! Map Heimdal's `krb5_kdc_configuration` to `pkinit-core`'s config types.
 
 use pkinit_core::config::{PkinitClientConfig, PkinitKdcConfig};
@@ -26,8 +33,8 @@ pub(crate) unsafe fn read_kdc_config(
         kdc_config.identity = Some(v);
     }
 
-    // pkinit_anchors
-    if let Some(v) = unsafe { read_config_string(context, &["kdc", "pkinit_anchors"]) } {
+    // pkinit_anchors (admin may repeat the key to list multiple sources)
+    for v in unsafe { read_config_strings(context, &["kdc", "pkinit_anchors"]) } {
         kdc_config.anchors.push(v);
     }
 

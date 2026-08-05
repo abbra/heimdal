@@ -1,3 +1,10 @@
+// Copyright (c) 2025 Red Hat, Inc.
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the conditions in the
+// accompanying LICENSE file are met.
+
 //! Heimdal PKINIT adapter — bridges `pkinit-core` to the Heimdal KDC and
 //! client libraries.
 //!
@@ -22,7 +29,6 @@ mod bindings {
 mod client;
 mod config;
 mod ffi;
-mod hx509_bridge;
 mod kdc;
 mod o2k;
 mod trace;

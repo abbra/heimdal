@@ -1,3 +1,10 @@
+// Copyright (c) 2025 Red Hat, Inc.
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the conditions in the
+// accompanying LICENSE file are met.
+
 //! Client-side PKINIT adapter.
 //!
 //! This module implements the Heimdal client's internal PKINIT API surface
@@ -16,8 +23,6 @@ use crate::o2k::HeimdalOctetString2Key;
 pub struct PkinitClientCtx {
     state: PkinitClientState,
     config: PkinitClientConfig,
-    /// Cached DER of the last AS-REQ we built (needed for `process_as_rep`)
-    last_as_req_der: Vec<u8>,
 }
 
 impl PkinitClientCtx {
@@ -28,11 +33,7 @@ impl PkinitClientCtx {
         config: PkinitClientConfig,
     ) -> Self {
         let state = PkinitClientState::new(identity, trust_store, config.clone());
-        Self {
-            state,
-            config,
-            last_as_req_der: Vec::new(),
-        }
+        Self { state, config }
     }
 
     /// Set the KDC principal and optional hostname for SAN verification.

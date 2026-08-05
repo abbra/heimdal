@@ -1,3 +1,10 @@
+// Copyright (c) 2025 Red Hat, Inc.
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the conditions in the
+// accompanying LICENSE file are met.
+
 //! `OctetString2Key` implementation using Heimdal's `krb5_random_to_key`
 //! and `krb5_c_keylengths`.
 

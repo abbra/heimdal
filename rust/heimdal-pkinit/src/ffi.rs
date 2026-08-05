@@ -1,3 +1,10 @@
+// Copyright (c) 2025 Red Hat, Inc.
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the conditions in the
+// accompanying LICENSE file are met.
+
 //! C-callable FFI functions exposed to Heimdal.
 //!
 //! These functions provide the interface that Heimdal's KDC main loop
@@ -146,6 +153,10 @@ pub unsafe extern "C" fn heimdal_pkinit_rd_padata(
                 )
             } {
                 Ok(cp) => {
+                    // SAFETY: out_params was checked non-null above; the
+                    // resulting pointer is only ever reclaimed by
+                    // heimdal_pkinit_free_client_param's matching
+                    // Box::from_raw.
                     unsafe { *out_params = Box::into_raw(cp) as *mut c_void };
                     0
                 }
@@ -216,6 +227,10 @@ pub unsafe extern "C" fn heimdal_pkinit_mk_pa_reply(
             let as_req_der = if as_req_data.is_null() || as_req_len == 0 {
                 &[]
             } else {
+                // SAFETY: as_req_data is non-null per the check above;
+                // the caller (kdc/kerberos5.c) passes as_req_len as the
+                // exact byte length of the buffer it owns and does not
+                // mutate it for the duration of this call.
                 unsafe { std::slice::from_raw_parts(as_req_data, as_req_len) }
             };
 
@@ -353,6 +368,11 @@ pub unsafe extern "C" fn heimdal_pkinit_free_client_param(
     params: *mut c_void,
 ) {
     if !params.is_null() {
+        // SAFETY: `params` is documented to be either null (checked above)
+        // or a pointer previously returned by `heimdal_pkinit_rd_padata`
+        // and not yet freed — the caller (`kdc/kerberos5.c`) upholds this
+        // by calling this function exactly once, at the end of
+        // `pa_pkinit_validate`.
         drop(unsafe { Box::from_raw(params as *mut PkClientParams) });
     }
 }
@@ -527,6 +547,9 @@ pub unsafe extern "C" fn heimdal_pkinit_client_init(
     let anchor_strs: Vec<&str> = if anchors.is_null() || anchors_len == 0 {
         vec![]
     } else {
+        // SAFETY: anchors is non-null per the check above; the caller
+        // passes anchors_len as the exact element count of the array it
+        // owns for the duration of this call.
         let slice = unsafe { std::slice::from_raw_parts(anchors, anchors_len) };
         slice
             .iter()
@@ -558,6 +581,9 @@ pub unsafe extern "C" fn heimdal_pkinit_client_init(
         )
     } {
         Ok(ctx) => {
+            // SAFETY: out_ctx was checked non-null above; the resulting
+            // pointer is only ever reclaimed by
+            // heimdal_pkinit_client_free's matching Box::from_raw.
             unsafe { *out_ctx = Box::into_raw(ctx) as *mut c_void };
             0
         }
@@ -580,6 +606,8 @@ pub unsafe extern "C" fn heimdal_pkinit_client_set_freshness(
         return;
     }
     let client = unsafe { &mut *(ctx as *mut PkinitClientCtx) };
+    // SAFETY: token is non-null and token_len is nonzero per the check
+    // above; the caller owns the buffer for the duration of this call.
     let data = unsafe { std::slice::from_raw_parts(token, token_len) }.to_vec();
     client.set_freshness_token(data);
 }
@@ -599,6 +627,8 @@ pub unsafe extern "C" fn heimdal_pkinit_client_process_hint(
         return;
     }
     let client = unsafe { &mut *(ctx as *mut PkinitClientCtx) };
+    // SAFETY: hint_data is non-null and hint_len is nonzero per the check
+    // above; the caller owns the buffer for the duration of this call.
     let hint = unsafe { std::slice::from_raw_parts(hint_data, hint_len) };
     client.process_hint(hint);
 }
@@ -634,6 +664,8 @@ pub unsafe extern "C" fn heimdal_pkinit_client_mk_padata(
     let req_body = if req_body_data.is_null() || req_body_len == 0 {
         &[]
     } else {
+        // SAFETY: req_body_data is non-null per the check above; the
+        // caller owns the buffer for the duration of this call.
         unsafe { std::slice::from_raw_parts(req_body_data, req_body_len) }
     };
 
@@ -678,10 +710,14 @@ pub unsafe extern "C" fn heimdal_pkinit_client_rd_pa_reply(
     }
 
     let client = unsafe { &mut *(ctx as *mut PkinitClientCtx) };
+    // SAFETY: pa_data is non-null per the check above; the caller owns
+    // the buffer, sized pa_len, for the duration of this call.
     let pa_slice = unsafe { std::slice::from_raw_parts(pa_data, pa_len) };
     let as_req_der = if as_req_data.is_null() || as_req_len == 0 {
         &[]
     } else {
+        // SAFETY: as_req_data is non-null per the check above; the
+        // caller owns the buffer for the duration of this call.
         unsafe { std::slice::from_raw_parts(as_req_data, as_req_len) }
     };
 
@@ -739,6 +775,9 @@ pub unsafe extern "C" fn heimdal_pkinit_client_tryagain(
         return libc::EINVAL as _;
     }
     let client = unsafe { &mut *(ctx as *mut PkinitClientCtx) };
+    // SAFETY: error_padata is non-null and error_padata_len is nonzero
+    // per the check above; the caller owns the buffer for the duration
+    // of this call.
     let data = unsafe { std::slice::from_raw_parts(error_padata, error_padata_len) };
 
     match client.handle_tryagain(data) {
@@ -746,7 +785,9 @@ pub unsafe extern "C" fn heimdal_pkinit_client_tryagain(
             use pkinit_core::client::RetryAction;
             match action {
                 RetryAction::NoRetry => libc::EINVAL as _,
-                _ => 0, // retry is possible
+                RetryAction::RetryWithDhParams(_) => 0,
+                RetryAction::RetryWithKemAlgorithm(_) => 0,
+                RetryAction::RetryWithCerts => 0,
             }
         }
         Err(_) => libc::EINVAL as _,
@@ -763,6 +804,11 @@ pub unsafe extern "C" fn heimdal_pkinit_client_free(
     ctx: *mut c_void,
 ) {
     if !ctx.is_null() {
+        // SAFETY: `ctx` is documented to be either null (checked above) or
+        // a pointer from `heimdal_pkinit_client_init` — the C shim
+        // (`lib/krb5/pkinit-rust.c::_krb5_pk_free_rust_ctx`) upholds this
+        // and is only invoked once per context, from
+        // `_krb5_get_init_creds_opt_free_pkinit`.
         drop(unsafe { Box::from_raw(ctx as *mut PkinitClientCtx) });
     }
 }
