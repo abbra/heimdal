@@ -69,12 +69,20 @@ pub(crate) unsafe fn read_kdc_config(
     // pkinit_dh_min_bits
     kdc_config.dh_min_bits = config.pkinit_dh_min_bits as u32;
 
-    // Read PQC config from krb5.conf via krb5_config_get_string
+    // PQC config: read from krb5.conf since krb5_kdc_configuration is
+    // defined in an internal header (kdc_locl.h) that bindgen can't access.
+    // The C side populates config->pkinit_pqc_min_algorithm from krb5.conf
+    // for its own use; we read the same krb5.conf values independently.
     let pqc_min = unsafe { read_config_string(context, &["kdc", "pkinit_pqc_min_algorithm"]) };
     if let Some(ref name) = pqc_min {
         if let Some(alg) = KemAlgorithm::from_name(name) {
             kdc_config.supported_kem_algorithms = alg.algorithms_at_or_above();
         }
+    }
+
+    let freshness = unsafe { read_config_string(context, &["kdc", "pkinit_require_freshness"]) };
+    if let Some(ref v) = freshness {
+        kdc_config.require_freshness = matches!(v.as_str(), "yes" | "true" | "1");
     }
 
     kdc_config

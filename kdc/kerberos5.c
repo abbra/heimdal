@@ -579,9 +579,13 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 	if (ret)
 	    goto out;
 
+	/* The nonce is carried inside the opaque pkp handle;
+	 * the Rust side extracts it from VerifiedRequest.nonce.
+	 * We pass 0 here and let build_as_rep use the stored value.
+	 * TODO: expose the nonce from the opaque handle if needed. */
 	ret = heimdal_pkinit_mk_pa_reply(r->context, r->config,
 					 pkp,
-					 0 /* nonce from verified req */,
+					 0,
 					 r->sessionetype,
 					 (const unsigned char *)r->request.data,
 					 r->request.length,

@@ -38,6 +38,18 @@
 
 #include <heimbasepriv.h>
 
+#ifdef PKINIT_RUST
+/* Rust pkinit-core adapter — prototypes from pkinit-rust.c */
+krb5_error_code _krb5_pk_mk_padata_rust(krb5_context, void *, int, int,
+					 const KDC_REQ_BODY *, unsigned,
+					 krb5_error_code, TYPED_DATA *,
+					 METHOD_DATA *);
+krb5_error_code _krb5_pk_rd_pa_reply_rust(krb5_context, void *,
+					  const AS_REQ *, const AS_REP *,
+					  unsigned, const krb5_data *,
+					  PA_DATA *, krb5_keyblock **);
+#endif
+
 struct pa_info_data {
     krb5_enctype etype;
     krb5_salt salt;
@@ -1181,6 +1193,17 @@ pa_data_to_md_pkinit(krb5_context context,
     if (ctx->pk_init_ctx == NULL)
 	return 0;
 #ifdef PKINIT
+#ifdef PKINIT_RUST
+    return _krb5_pk_mk_padata_rust(context,
+				   ctx->pk_init_ctx,
+				   ctx->ic_flags,
+				   win2k,
+				   &a->req_body,
+				   ctx->pk_nonce,
+				   error_code,
+				   td,
+				   md);
+#else
     return _krb5_pk_mk_padata(context,
 			      ctx->pk_init_ctx,
 			      ctx->ic_flags,
@@ -1190,6 +1213,7 @@ pa_data_to_md_pkinit(krb5_context context,
                               error_code,
 			      td,
                               md);
+#endif /* PKINIT_RUST */
 #else
     krb5_set_error_message(context, EINVAL,
 			   N_("no support for PKINIT compiled in", ""));
@@ -1399,6 +1423,16 @@ pkinit_step(krb5_context context,
         pkinit_ctx->used_pkinit = 1;
         pkinit_ctx->tries++;
     } else if (rep && pa) {
+#ifdef PKINIT_RUST
+	ret = _krb5_pk_rd_pa_reply_rust(context,
+					ctx->pk_init_ctx,
+					a,
+					rep,
+					ctx->pk_nonce,
+					&ctx->req_buffer,
+					pa,
+					&ctx->fast_state.reply_key);
+#else
 	ret = _krb5_pk_rd_pa_reply(context,
 				   ctx->pk_init_ctx,
 				   a,
@@ -1407,6 +1441,7 @@ pkinit_step(krb5_context context,
 				   &ctx->req_buffer,
 				   pa,
 				   &ctx->fast_state.reply_key);
+#endif /* PKINIT_RUST */
 	if (ret == 0)
 	    ctx->runflags.allow_save_as_reply_key = 1;
     }

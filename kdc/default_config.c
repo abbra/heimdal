@@ -323,6 +323,15 @@ krb5_kdc_get_config(krb5_context context, krb5_kdc_configuration **config)
                                      "pkinit_max_life_from_cert_extension",
                                      NULL);
 
+    c->pkinit_pqc_min_algorithm =
+	krb5_config_get_string(context, NULL,
+			       "kdc", "pkinit_pqc_min_algorithm", NULL);
+
+    c->pkinit_require_freshness =
+	krb5_config_get_bool_default(context, NULL, FALSE,
+				     "kdc", "pkinit_require_freshness",
+				     NULL);
+
     c->synthetic_clients =
 	krb5_config_get_bool_default(context, NULL,
 				     c->synthetic_clients,

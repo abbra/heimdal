@@ -175,10 +175,18 @@ pub(crate) unsafe fn build_reply(
 
     let o2k = unsafe { HeimdalOctetString2Key::new(context) };
 
+    // If nonce is 0, use the nonce from the verified request
+    // (the KDC C shim may not have access to it directly)
+    let effective_nonce = if nonce == 0 {
+        cp.verified.nonce
+    } else {
+        nonce
+    };
+
     match state.build_as_rep(
         &cp.verified,
         &BuildAsRepParams {
-            nonce,
+            nonce: effective_nonce,
             enctype,
             as_req_der,
             client_name,

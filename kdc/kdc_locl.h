@@ -123,6 +123,10 @@ struct krb5_kdc_configuration {
     krb5_timestamp synthetic_clients_max_life;
     krb5_timestamp synthetic_clients_max_renew;
 
+    /* Post-quantum PKINIT (draft-bokovoy-kitten-pkinit-pqc) */
+    const char *pkinit_pqc_min_algorithm;
+    unsigned int pkinit_require_freshness : 1;
+
     int digests_allowed;
     unsigned int enable_digest : 1;
 
