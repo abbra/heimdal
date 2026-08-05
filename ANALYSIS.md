@@ -534,10 +534,12 @@ plus `plugin_base_dir` redirection away from the system's own
 
 ### 7.5 Known limitations
 
-- Per-call algorithm selection (`kinit --key-agreement=`, `--kdf=`) is
-  intentionally rejected on the Rust backend rather than silently
-  ignored, since pkinit-core does not yet expose equivalent per-call
-  overrides.
+- `kinit --key-agreement=<modp_2048|modp_4096|P-256|P-384|P-521>` is
+  supported via `PkinitClientState::set_dh_group()`. `modp_3072` has no
+  Oakley-3072 equivalent in pkinit-core (only 2048/4096) and is rejected.
+  `--kdf=` and `--signature-algorithm=` are still not exposed by
+  pkinit-core for per-call override and remain rejected rather than
+  silently ignored.
 - RFC 8070 freshness tokens: client-side support is wired, but KDC-side
   token generation needs further Heimdal framework changes.
 - Win2k / Apple BTMM PKINIT: not implemented in pkinit-core, routed to

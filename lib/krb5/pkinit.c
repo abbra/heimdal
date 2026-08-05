@@ -2687,17 +2687,32 @@ krb5_get_init_creds_opt_set_pkinit_allowed_algs(krb5_context context,
      * opt->opt_private->pk_init_ctx is a Rust pkinit-core handle when
      * PKINIT_RUST is enabled (see krb5_get_init_creds_opt_set_pkinit()) —
      * it has a completely different memory layout than
-     * krb5_pk_init_ctx_data, so the field writes below would be type
-     * confusion. pkinit-core selects its own algorithms internally;
-     * per-call algorithm overrides are not yet supported on this path.
+     * krb5_pk_init_ctx_data, so the field writes the #else branch below
+     * does would be type confusion. dh_alg (--key-agreement) is
+     * supported via pkinit-core's set_dh_group(); sig_alg/kdf_alg are
+     * not yet exposed by pkinit-core for per-call selection.
      */
-    (void)dh_alg;
-    (void)sig_alg;
-    (void)kdf_alg;
-    krb5_set_error_message(context, EINVAL,
-			   N_("PKINIT: per-call algorithm selection is not "
-			      "supported with the Rust PKINIT backend", ""));
-    return EINVAL;
+    extern krb5_error_code _krb5_pk_set_dh_group_rust(void *, const char *);
+
+    if (sig_alg || kdf_alg) {
+	krb5_set_error_message(context, EINVAL,
+			       N_("PKINIT: signature-algorithm/kdf selection "
+				  "is not supported with the Rust PKINIT "
+				  "backend", ""));
+	return EINVAL;
+    }
+    if (dh_alg) {
+	krb5_error_code ret =
+	    _krb5_pk_set_dh_group_rust(opt->opt_private->pk_init_ctx, dh_alg);
+	if (ret) {
+	    krb5_set_error_message(context, ret,
+				   "PKINIT: Key agreement algorithm %s "
+				   "unknown or unsupported by the Rust "
+				   "PKINIT backend", dh_alg);
+	    return ret;
+	}
+    }
+    return 0;
 #else
     const heim_oid *oid = NULL;
 

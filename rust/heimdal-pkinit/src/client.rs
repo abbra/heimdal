@@ -13,10 +13,28 @@
 
 use pkinit_core::client::{AsRepParams, PkinitClientState};
 use pkinit_core::config::PkinitClientConfig;
+use pkinit_core::constants::DhGroup;
 use pkinit_core::identity::{IdentitySource, PkinitIdentity, TrustStore};
 
 use crate::bindings;
 use crate::o2k::HeimdalOctetString2Key;
+
+/// Parse a `kinit --key-agreement=<name>` value into a `DhGroup`.
+///
+/// Matches Heimdal's own naming for the groups pkinit-core actually
+/// supports; `modp_3072` (and any other unrecognized name) is not
+/// available in pkinit-core and returns `None` rather than silently
+/// substituting a different group.
+pub(crate) fn parse_dh_group(name: &str) -> Option<DhGroup> {
+    match name.to_ascii_lowercase().as_str() {
+        "modp_2048" => Some(DhGroup::Oakley2048),
+        "modp_4096" => Some(DhGroup::Oakley4096),
+        "p-256" => Some(DhGroup::EcP256),
+        "p-384" => Some(DhGroup::EcP384),
+        "p-521" => Some(DhGroup::EcP521),
+        _ => None,
+    }
+}
 
 /// Opaque client-side PKINIT context, replaces `krb5_pk_init_ctx_data`.
 pub struct PkinitClientCtx {
@@ -42,6 +60,12 @@ impl PkinitClientCtx {
     /// Set the freshness token received from the KDC.
     pub fn set_freshness_token(&mut self, token: Vec<u8>) {
         self.state.set_freshness_token(token);
+    }
+
+    /// Override the DH/ECDH group for the next `build_as_req()` call.
+    /// Backs `kinit --key-agreement`.
+    pub fn set_dh_group(&mut self, group: DhGroup) {
+        self.state.set_dh_group(group);
     }
 
     /// Process a PKINIT hint from the KDC (KEM algorithm advertisement).

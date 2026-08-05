@@ -278,5 +278,17 @@ _krb5_pk_free_rust_ctx(void *rust_ctx)
     heimdal_pkinit_client_free(rust_ctx);
 }
 
+/*
+ * Override the DH/ECDH group for the next AS-REQ.
+ *
+ * Called from krb5_get_init_creds_opt_set_pkinit_allowed_algs() when
+ * PKINIT_RUST is defined, backing `kinit --key-agreement=<name>`.
+ */
+krb5_error_code
+_krb5_pk_set_dh_group_rust(void *rust_ctx, const char *dh_alg)
+{
+    return heimdal_pkinit_client_set_dh_group(rust_ctx, dh_alg);
+}
+
 #endif /* PKINIT_RUST */
 #endif /* PKINIT */

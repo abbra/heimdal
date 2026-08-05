@@ -650,6 +650,39 @@ pub unsafe extern "C" fn heimdal_pkinit_client_set_freshness(
     client.set_freshness_token(data);
 }
 
+/// Override the DH/ECDH group for the next AS-REQ. Backs `kinit
+/// --key-agreement=<name>`. Returns EINVAL if `group_name` isn't one of
+/// pkinit-core's supported groups (`modp_2048`, `modp_4096`, `P-256`,
+/// `P-384`, `P-521` — case-insensitive); the caller must not proceed with
+/// the request in that case rather than silently using a default group.
+///
+/// # Safety
+///
+/// `ctx` must be a valid pointer from `heimdal_pkinit_client_init`.
+/// `group_name` must be a valid, NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn heimdal_pkinit_client_set_dh_group(
+    ctx: *mut c_void,
+    group_name: *const c_char,
+) -> bindings::krb5_error_code {
+    if ctx.is_null() || group_name.is_null() {
+        return libc::EINVAL as _;
+    }
+    // SAFETY: group_name is non-null per the check above and is
+    // documented to be a valid NUL-terminated C string owned by the
+    // caller for the duration of this call.
+    let name = match unsafe { std::ffi::CStr::from_ptr(group_name) }.to_str() {
+        Ok(s) => s,
+        Err(_) => return libc::EINVAL as _,
+    };
+    let Some(group) = crate::client::parse_dh_group(name) else {
+        return libc::EINVAL as _;
+    };
+    let client = unsafe { &mut *(ctx as *mut PkinitClientCtx) };
+    client.set_dh_group(group);
+    0
+}
+
 /// Process a PKINIT hint (KEM algorithm advertisement) from the KDC.
 ///
 /// # Safety

@@ -289,7 +289,6 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 [[package]]
 name = "pkinit-core"
 version = "0.1.0"
-source = "git+https://github.com/abbra/kurbu5-pkinit.git?rev=0be85c09117e3fff72940575329f7d2af0631766#0be85c09117e3fff72940575329f7d2af0631766"
 dependencies = [
  "native-ossl",
  "synta",

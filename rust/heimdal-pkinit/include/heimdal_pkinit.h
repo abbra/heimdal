@@ -221,6 +221,18 @@ heimdal_pkinit_client_process_hint(void *ctx,
                                    size_t hint_len);
 
 /*
+ * Override the DH/ECDH group for the next AS-REQ. Backs
+ * `kinit --key-agreement=<name>`.
+ *
+ * Returns 0 on success, EINVAL if group_name isn't one of pkinit-core's
+ * supported groups ("modp_2048", "modp_4096", "P-256", "P-384", "P-521" —
+ * case-insensitive). The caller must not proceed with the request on
+ * EINVAL rather than silently falling back to a default group.
+ */
+krb5_error_code
+heimdal_pkinit_client_set_dh_group(void *ctx, const char *group_name);
+
+/*
  * Build the PA-PK-AS-REQ PA-DATA value.
  * Replaces _krb5_pk_mk_padata().
  *

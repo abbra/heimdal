@@ -1,3 +1,11 @@
 [workspace]
 members = ["heimdal-pkinit"]
 resolver = "3"
+
+# TEMPORARY: pkinit-core's set_dh_group() (needed for --key-agreement
+# support) is only committed locally in kurbu5-pkinit, not pushed to
+# origin yet. Remove this patch and update heimdal-pkinit/Cargo.toml's
+# `rev` once that commit is pushed, matching how the dependency is
+# normally pinned.
+[patch."https://github.com/abbra/kurbu5-pkinit.git"]
+pkinit-core = { path = "/home/abokovoy/workspace/kurbu5-pkinit/pkinit-core" }
