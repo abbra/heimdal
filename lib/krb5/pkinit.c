@@ -2615,24 +2615,20 @@ _krb5_dh_group_ok(krb5_context context, unsigned long bits,
     return KRB5_KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED;
 }
 
-KRB5_LIB_FUNCTION void KRB5_LIB_CALL
-_krb5_get_init_creds_opt_free_pkinit(krb5_get_init_creds_opt *opt)
+/*
+ * Free the C-allocated pk_init_ctx_data and everything it owns (loaded
+ * hx509 identity/certs/anchors/certpool, verify context, any ephemeral
+ * EVP_PKEY, cached DH moduli). Used both by the normal free path and by
+ * the two places krb5_get_init_creds_opt_set_pkinit() discards a C struct
+ * before it was ever returned to the caller (RSA-mode-without-certs
+ * error, and the PKINIT_RUST success/failure paths).
+ */
+static void
+free_pk_init_ctx_data(krb5_pk_init_ctx ctx)
 {
-    krb5_pk_init_ctx ctx;
-
-    if (opt->opt_private == NULL || opt->opt_private->pk_init_ctx == NULL)
+    if (ctx == NULL)
 	return;
 
-#ifdef PKINIT_RUST
-    {
-	extern void _krb5_pk_free_rust_ctx(void *);
-	_krb5_pk_free_rust_ctx(opt->opt_private->pk_init_ctx);
-	opt->opt_private->pk_init_ctx = NULL;
-	return;
-    }
-#endif
-
-    ctx = opt->opt_private->pk_init_ctx;
     switch (ctx->keyex) {
     case USE_DH:
     case USE_ECDH:
@@ -2657,7 +2653,25 @@ _krb5_get_init_creds_opt_free_pkinit(krb5_get_init_creds_opt *opt)
 	free(ctx->id);
 	ctx->id = NULL;
     }
-    free(opt->opt_private->pk_init_ctx);
+    free(ctx);
+}
+
+KRB5_LIB_FUNCTION void KRB5_LIB_CALL
+_krb5_get_init_creds_opt_free_pkinit(krb5_get_init_creds_opt *opt)
+{
+    if (opt->opt_private == NULL || opt->opt_private->pk_init_ctx == NULL)
+	return;
+
+#ifdef PKINIT_RUST
+    {
+	extern void _krb5_pk_free_rust_ctx(void *);
+	_krb5_pk_free_rust_ctx(opt->opt_private->pk_init_ctx);
+	opt->opt_private->pk_init_ctx = NULL;
+	return;
+    }
+#endif
+
+    free_pk_init_ctx_data(opt->opt_private->pk_init_ctx);
     opt->opt_private->pk_init_ctx = NULL;
 }
 
@@ -2844,22 +2858,28 @@ krb5_get_init_creds_opt_set_pkinit(krb5_context context,
 	if (opt->opt_private->pk_init_ctx->id->certs == NULL) {
 	    krb5_set_error_message(context, EINVAL,
 				   N_("No anonymous pkinit support in RSA mode", ""));
+	    free_pk_init_ctx_data(opt->opt_private->pk_init_ctx);
+	    opt->opt_private->pk_init_ctx = NULL;
 	    return EINVAL;
 	}
     }
 
 #ifdef PKINIT_RUST
     /*
-     * Create the Rust pkinit-core client context alongside the C one.
-     * The Rust context is stored in the ->anonymous field's address space;
-     * the _rust() functions receive it via the same void *c parameter.
+     * Replace the C pk_init_ctx with a Rust pkinit-core client context.
      *
-     * For now, we create the Rust context and store it as the pk_init_ctx
-     * itself.  The C struct fields (keyex, type, etc.) are only used by
-     * the C code path; the Rust path ignores them.
+     * There is no tagged union distinguishing a Rust handle from a C
+     * struct at this pointer, so once PKINIT_RUST is compiled in,
+     * pk_init_ctx MUST always be a Rust handle whenever this function
+     * returns success — pa_data_to_md_pkinit()/pkinit_step() in
+     * init_creds_pw.c dispatch to the _rust() FFI variants unconditionally
+     * at compile time and would otherwise reinterpret a leftover C struct
+     * as a Rust Box<PkinitClientCtx>, causing memory corruption. Treat
+     * Rust context init failure as fatal.
      *
-     * TODO: In a future cleanup, split pk_init_ctx into a union with
-     * a Rust-only and C-only variant.
+     * TODO: In a future cleanup, split pk_init_ctx into a tagged union
+     * with a Rust-only and C-only variant so a runtime fallback becomes
+     * possible again.
      */
     {
 	extern void *_krb5_pk_init_rust_ctx(krb5_context, krb5_principal,
@@ -2868,21 +2888,15 @@ krb5_get_init_creds_opt_set_pkinit(krb5_context context,
 						user_id, x509_anchors,
 						(flags & KRB5_GIC_OPT_PKINIT_ANONYMOUS) != 0);
 	if (rust_ctx == NULL) {
-	    /*
-	     * Non-fatal: fall back to the C code path.
-	     * The _rust() functions will see pk_init_ctx is the C struct
-	     * and work with it (the opaque handle is just a pointer).
-	     */
-	    _krb5_debug(context, 1, "PKINIT(rust): failed to init rust context, using C fallback");
-	} else {
-	    /*
-	     * Replace pk_init_ctx with the Rust handle.
-	     * Free the C struct we allocated above.
-	     */
-	    _krb5_debug(context, 1, "PKINIT(rust): client context initialized");
-	    free(opt->opt_private->pk_init_ctx);
-	    opt->opt_private->pk_init_ctx = (krb5_pk_init_ctx)rust_ctx;
+	    krb5_set_error_message(context, EINVAL,
+				   N_("PKINIT: failed to initialize Rust PKINIT context", ""));
+	    free_pk_init_ctx_data(opt->opt_private->pk_init_ctx);
+	    opt->opt_private->pk_init_ctx = NULL;
+	    return EINVAL;
 	}
+	_krb5_debug(context, 1, "PKINIT(rust): client context initialized");
+	free_pk_init_ctx_data(opt->opt_private->pk_init_ctx);
+	opt->opt_private->pk_init_ctx = (krb5_pk_init_ctx)rust_ctx;
     }
 #endif /* PKINIT_RUST */
 
