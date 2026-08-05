@@ -21,9 +21,18 @@ mkdir -p "$OUTDIR"
 openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 \
     -out "$OUTDIR/ca.key" 2>/dev/null
 
+cat > "$OUTDIR/ca-ext.cnf" <<EOF
+[v3_ca]
+basicConstraints = critical, CA:TRUE
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+EOF
+
 openssl req -new -x509 -key "$OUTDIR/ca.key" \
     -subj "/CN=Test PKINIT CA" \
     -days 3650 \
+    -extensions v3_ca -config <(cat /etc/pki/tls/openssl.cnf "$OUTDIR/ca-ext.cnf" 2>/dev/null || cat /etc/ssl/openssl.cnf "$OUTDIR/ca-ext.cnf" 2>/dev/null || echo "[req]\ndistinguished_name=req_dn\n[req_dn]\n[v3_ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash") \
     -out "$OUTDIR/ca.pem" 2>/dev/null
 
 # ── KDC certificate ──────────────────────────────────────────────────
@@ -36,6 +45,8 @@ cat > "$OUTDIR/kdc-ext.cnf" <<EOF
 basicConstraints = CA:FALSE
 keyUsage = digitalSignature
 extendedKeyUsage = 1.3.6.1.5.2.3.5
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
 subjectAltName = @kdc_san
 
 [kdc_san]
@@ -74,6 +85,8 @@ cat > "$OUTDIR/client-ext.cnf" <<EOF
 basicConstraints = CA:FALSE
 keyUsage = digitalSignature
 extendedKeyUsage = 1.3.6.1.5.2.3.4
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
 subjectAltName = @client_san
 
 [client_san]

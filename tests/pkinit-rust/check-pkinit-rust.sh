@@ -28,7 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TOP_SRCDIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WORKDIR="$(mktemp -d /tmp/pkinit-rust-test.XXXXXX)"
 
-REALM="PKINIT-RUST-TEST.EXAMPLE.COM"
+REALM="EXAMPLE.COM"
 CLIENT="testuser"
 KDC_PID=""
 ec=0
@@ -220,6 +220,10 @@ write_krb5_conf() {
     pkinit_principal_in_certificate = true
     pkinit_dh_min_bits = 0
 ${pqc_line}
+    database = {
+        dbname = ${WORKDIR}/db/heimdal
+        log_file = ${WORKDIR}/db/log
+    }
 
 [logging]
     kdc = FILE:${WORKDIR}/kdc.log
