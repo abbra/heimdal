@@ -447,3 +447,98 @@ need to be wrapped in the Rust adapter.
 | `kurbu5-pkinit/src/trace.rs` | 🔄 | Heimdal uses `kdc_log` not `krb5int_trace` |
 | `kurbu5-pkinit/src/principal.rs` | 🔄 | Heimdal principal API differs |
 | Test infrastructure (`protocol_integration.rs`) | ✅ | Pure `pkinit-core` tests |
+
+---
+
+## 7. Post-Implementation Fixes and Hardening
+
+Notes accumulated while implementing and hardening the adapter, kept here
+instead of in commit bodies.
+
+### 7.1 Build system gotchas
+
+- `krb5_kdc_configuration` is defined in the internal `kdc_locl.h`; bindgen
+  (against installed `kdc.h`) produces a different, incompatible layout
+  (missing PQC fields, different bitfield packing) — accessing it directly
+  segfaults. Read all KDC PKINIT config from `krb5.conf` via
+  `krb5_config_get_*` instead of touching struct fields from Rust.
+- The Rust static archive must be linked into every Heimdal shared library
+  that calls its symbols directly, not just one "central" library:
+  `libkrb5.so`'s version-script.map hides the internal `heimdal_pkinit_*`
+  symbols from its exported ABI, so `libkdc.so` cannot resolve them
+  transitively through its `libkrb5.la` dependency. `LIB_pkinit_rust` is
+  added to both `libkrb5_la_LIBADD` and `libkdc_la_LIBADD`, mirroring the
+  existing `LIB_pkinit`/`libhx509.la` precedent.
+- `pkinit-core` (via `native-ossl`/`openssl-sys`) needs both `-lssl` and
+  `-lcrypto` at final link time even though only crypto-side APIs are
+  called. Heimdal has no `LIB_openssl_ssl` autoconf variable since nothing
+  else in the tree links libssl.
+- `kdc_log` is not available in `libkrb5` — the trace bridge (`trace.rs`)
+  uses a callback function pointer (`heimdal_pkinit_set_trace`) registered
+  by the KDC side at init time; client-side tracing is a no-op.
+
+### 7.2 Struct-layout / bindgen risk
+
+Any Heimdal struct defined in an internal header (`kdc_locl.h`,
+`krb5_context_data`'s `hx509ctx` field) cannot be safely accessed via
+bindgen bindings generated against *installed* headers, since the real
+layout can differ. Rule followed throughout: read config via
+`krb5_config_get_*`, and delegate anything needing correctly-typed
+hx509/HDB access back to C.
+
+This is why certificate subject-DN extraction and full HDB
+cert-pinning/PKINIT-ACL authorization live in C
+(`kdc/kerberos5.c`, `kdc/pkinit.c`'s shared `_kdc_pk_check_client_cert()`),
+not in Rust: `pkinit-core` verifies the CMS signature and hands back the
+raw leaf certificate DER; the KDC-side C caller parses it with its own
+hx509 and performs the authorization decision, so both the Rust and
+legacy hx509-based PKINIT paths enforce identical policy through the same
+function — HDB exact-cert-match, PKINIT SAN / MS UPN SAN (gated on
+`pkinit_princ_in_cert`), per-principal HDB ACL, and the file-based mapping
+table, in that order.
+
+### 7.3 Security fixes
+
+- Anonymous PKINIT auth bypass: a certless request must be rejected unless
+  the KDC has independently verified (not via string compare) that the
+  *requested* principal actually is the well-known anonymous principal.
+- `pk_init_ctx` type confusion: once `PKINIT_RUST` is compiled in,
+  `pk_init_ctx` must always be a Rust handle — there is no tagged union
+  distinguishing a Rust handle from a legacy C struct at that pointer.
+  Client-context init failure is fatal (EINVAL) rather than silently
+  falling back to a stale C struct that other code paths would
+  misinterpret.
+- Mutex poisoning / panic safety: `KDC_STATE` uses `RwLock` with
+  poison-recovery, and every `extern "C"` entry point wraps its body in
+  `catch_unwind` so a panic can't unwind across the FFI boundary
+  (undefined behavior) or permanently wedge the KDC.
+- The PQC auto-retry hint (`TD-DH-PARAMETERS`) was built but never
+  attached to the KRB-ERROR, silently breaking retry-with-ML-KEM.
+- A DER-copy allocation failure in `heimdal_pkinit_check_client()` must be
+  a hard `ENOMEM`, not a silent "no certificate presented" — the C
+  caller's authorization check only runs when it sees a non-null DER
+  pointer.
+
+### 7.4 Test infrastructure
+
+`tests/pkinit-rust/`: `check-pkinit-rust.sh` (single-KDC integration),
+`check-interop.sh` (six-scenario Heimdal↔MIT cross-implementation matrix),
+`build-and-test.sh` (full autoreconf→configure→make→test pipeline),
+`setup-pki.sh` (test CA/KDC/client cert generation), and a shared
+`common.sh` (`free_port`/`testsuccess`/`testfailed`/`testskip`).
+
+MIT-side plugin loading requires the modern `clpreauth`/`kdcpreauth`/
+`certauth` module directives (not the legacy single `preauth` directive)
+plus `plugin_base_dir` redirection away from the system's own
+`pkinit.so`.
+
+### 7.5 Known limitations
+
+- Per-call algorithm selection (`kinit --key-agreement=`, `--kdf=`) is
+  intentionally rejected on the Rust backend rather than silently
+  ignored, since pkinit-core does not yet expose equivalent per-call
+  overrides.
+- RFC 8070 freshness tokens: client-side support is wired, but KDC-side
+  token generation needs further Heimdal framework changes.
+- Win2k / Apple BTMM PKINIT: not implemented in pkinit-core, routed to
+  Heimdal's original C code path.
