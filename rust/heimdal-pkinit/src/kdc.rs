@@ -252,14 +252,21 @@ pub(crate) unsafe fn build_reply(
 
 /// Check whether a client certificate is authorized for a given principal.
 ///
-/// This replaces Heimdal's `_kdc_pk_check_client`. The implementation
-/// delegates to `pkinit-core`'s `certauth` module.
+/// This replaces Heimdal's `_kdc_pk_check_client`.
 ///
-/// `princ_in_cert` mirrors Heimdal's `pkinit_princ_in_cert` config knob: the
-/// C implementation this replaces (`_kdc_pk_check_client` in
-/// `kdc/pkinit.c`) only attempts SAN/UPN authorization when it is true;
-/// when false it falls back to HDB certificate pinning / PKINIT ACLs, which
-/// are not yet implemented on this path (see the `Err` branch below).
+/// Full authorization parity with the legacy hx509-based path (HDB
+/// exact-cert-match, PKINIT SAN / MS UPN SAN, per-principal HDB ACL, and
+/// the file-based mapping table — see `kdc/pkinit.c`'s
+/// `_kdc_pk_check_client_cert()`) needs the HDB entry and hx509 with
+/// correct, non-bindgen'd struct layouts, neither of which this crate can
+/// safely reach (see config.rs's comment on the same risk for
+/// `krb5_kdc_configuration`). So this function does the one authorization
+/// decision it *can* make safely — the certless-anonymous-request gate —
+/// and otherwise just confirms a certificate was presented, leaving the
+/// actual accept/reject decision to the caller
+/// (`kdc/kerberos5.c`'s `pa_pkinit_validate()`), which parses the DER this
+/// returns via `PkClientParams::verified::client_cert_der` and calls the
+/// same `_kdc_pk_check_client_cert()` the legacy path uses.
 ///
 /// `is_client_anonymous_principal` must be true only when the KDC has
 /// independently verified (via `_kdc_is_anonymous()`/
@@ -272,15 +279,12 @@ pub(crate) unsafe fn build_reply(
 /// the same bypass.
 pub(crate) enum CheckClientError {
     /// `krb5_error_code` to return, plus an optional human-readable reason
-    /// (SAN mismatch detail, etc.) for the caller to log / surface via
-    /// `_kdc_set_e_text`.
+    /// for the caller to log / surface via `_kdc_set_e_text`.
     Code(bindings::krb5_error_code, Option<String>),
 }
 
 pub(crate) fn check_client(
     cp: &PkClientParams,
-    client_principal: &str,
-    princ_in_cert: bool,
     is_client_anonymous_principal: bool,
 ) -> Result<String, CheckClientError> {
     if cp.verified.client_cert_der.is_empty() {
@@ -298,52 +302,10 @@ pub(crate) fn check_client(
         return Ok("<unauthenticated anonymous client>".to_string());
     }
 
-    if !princ_in_cert {
-        // pkinit_princ_in_cert = no: the C path falls back to HDB exact
-        // certificate pinning / PKINIT ACLs (hdb_entry_get_pkinit_cert /
-        // hdb_entry_get_pkinit_acl), neither of which is implemented on
-        // this Rust path yet. Fail closed rather than silently ignore the
-        // administrator's setting.
-        return Err(CheckClientError::Code(
-            libc::EACCES as bindings::krb5_error_code,
-            Some(
-                "pkinit_princ_in_cert=no and HDB certificate pinning / PKINIT ACLs \
-                 are not implemented on the Rust PKINIT path"
-                    .into(),
-            ),
-        ));
-    }
-
-    let result = pkinit_core::certauth::verify_client_san(
-        &cp.verified.client_cert_der,
-        client_principal,
-        true, // once princ_in_cert gating passes, also accept MS UPN SAN,
-              // matching _kdc_pk_check_client()'s unconditional UPN fallback
-    )
-    .map_err(|e| {
-        CheckClientError::Code(libc::EINVAL as bindings::krb5_error_code, Some(e.to_string()))
-    })?;
-
-    match result {
-        pkinit_core::certauth::CertauthResult::Authorized => {
-            // This is a placeholder, not the certificate's real X.509
-            // subject DN: computing that would require dereferencing
-            // krb5_context_data.hx509ctx, an internal struct whose layout
-            // is not guaranteed to match what bindgen generates from the
-            // *installed* Heimdal headers (see config.rs's comment on the
-            // same risk for krb5_kdc_configuration). Instead,
-            // heimdal_pkinit_check_client() in ffi.rs also returns the raw
-            // client_cert_der alongside this string, and the KDC-side
-            // caller (kdc/kerberos5.c) uses its own correctly-typed hx509
-            // to compute the real subject DN and replace this placeholder
-            // before it reaches the audit log.
-            Ok(format!("PKINIT:{}", client_principal))
-        }
-        pkinit_core::certauth::CertauthResult::Rejected(reason) => Err(CheckClientError::Code(
-            libc::EACCES as bindings::krb5_error_code,
-            Some(reason),
-        )),
-    }
+    // A certificate was presented. This is not the real subject DN — the
+    // caller overwrites it (or fails the request outright) once it has
+    // run the full authorization check; see the doc comment above.
+    Ok("<pending certificate-based authorization>".to_string())
 }
 
 #[cfg(test)]
@@ -368,9 +330,9 @@ mod tests {
         let cp = PkClientParams {
             verified: anon_verified_request(),
         };
-        // Attacker asks for "administrator@EXAMPLE.COM" with no cert at all.
+        // Attacker asks for a non-anonymous principal with no cert at all.
         // Without the anonymous-principal check this incorrectly succeeds.
-        let result = check_client(&cp, "administrator@EXAMPLE.COM", true, false);
+        let result = check_client(&cp, false);
         assert!(
             result.is_err(),
             "certless request for a non-anonymous principal must be rejected"
@@ -382,12 +344,8 @@ mod tests {
         let cp = PkClientParams {
             verified: anon_verified_request(),
         };
-        let result = check_client(
-            &cp,
-            "WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS",
-            true,
-            true, // caller confirms the requested principal IS the anonymous principal
-        );
+        // caller confirms the requested principal IS the anonymous principal
+        let result = check_client(&cp, true);
         assert!(result.is_ok());
     }
 }

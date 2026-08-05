@@ -1996,10 +1996,30 @@ out:
     return ret;
 }
 
+/*
+ * Authorize an already-parsed certificate + its already-computed subject
+ * DN against `r`'s client principal: HDB exact-cert-match, PKINIT SAN /
+ * MS UPN SAN (when pkinit_princ_in_cert is set), per-principal HDB ACL,
+ * and the file-based mapping table, in that order — the first match
+ * wins. Returns 0 on match, KRB5_KDC_ERR_CLIENT_NAME_MISMATCH if none
+ * match.
+ *
+ * Factored out of _kdc_pk_check_client() below so that the Rust PKINIT
+ * backend (kdc/kerberos5.c's pa_pkinit_validate(), PKINIT_RUST) can reuse
+ * the exact same authorization policy: pkinit-core verifies the CMS
+ * signature and hands back the raw leaf certificate DER, and the Rust
+ * path parses it with this process's own hx509 (correct struct layouts,
+ * unlike what bindgen would generate against installed headers) before
+ * calling in here — see the "hx509ctx layout risk" comment in
+ * rust/heimdal-pkinit/src/kdc.rs.
+ *
+ * Not static: called from kdc/kerberos5.c's pa_pkinit_validate() when
+ * built with PKINIT_RUST. Picks up its prototype from the auto-generated
+ * kdc-protos.h, like _kdc_pkinit_kx_reply().
+ */
 krb5_error_code
-_kdc_pk_check_client(astgs_request_t r,
-		     pk_client_params *cp,
-		     char **subject_name)
+_kdc_pk_check_client_cert(astgs_request_t r, hx509_cert cert,
+			  const char *subject_name)
 {
     krb5_kdc_configuration *config = r->config;
     HDB *clientdb = r->clientdb;
@@ -2007,8 +2027,123 @@ _kdc_pk_check_client(astgs_request_t r,
     const HDB_Ext_PKINIT_acl *acl;
     const HDB_Ext_PKINIT_cert *pc;
     krb5_error_code ret;
-    hx509_name name;
     size_t i;
+
+    ret = hdb_entry_get_pkinit_cert(client, &pc);
+    if (ret == 0 && pc) {
+	hx509_cert hcert;
+	size_t j;
+
+	for (j = 0; j < pc->len; j++) {
+	    hcert = hx509_cert_init_data(r->context->hx509ctx,
+					 pc->val[j].cert.data,
+					 pc->val[j].cert.length,
+					 NULL);
+	    if (hcert == NULL)
+		continue;
+	    ret = hx509_cert_cmp(hcert, cert);
+	    hx509_cert_free(hcert);
+	    if (ret == 0) {
+                kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
+                                "exact_match_cert");
+		kdc_log(r->context, config, 5,
+			"Found matching PKINIT cert in hdb");
+		return 0;
+	    }
+	}
+    }
+
+
+    if (config->pkinit_princ_in_cert) {
+	ret = match_rfc_san(r->context, config,
+			    r->context->hx509ctx,
+			    cert,
+			    client->principal);
+	if (ret == 0) {
+            kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
+                            "exact_match_PKINIT_SAN");
+	    kdc_log(r->context, config, 5,
+		    "Found matching PKINIT SAN in certificate");
+	    return 0;
+	}
+	ret = match_ms_upn_san(r->context, config,
+			       r->context->hx509ctx,
+			       cert,
+			       clientdb,
+			       client);
+	if (ret == 0) {
+            kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
+                            "exact_match_UPN_SAN");
+	    kdc_log(r->context, config, 5,
+		    "Found matching MS UPN SAN in certificate");
+	    return 0;
+	}
+    }
+
+    ret = hdb_entry_get_pkinit_acl(client, &acl);
+    if (ret == 0 && acl != NULL) {
+	/*
+	 * Cheat here and compare the generated name with the string
+	 * and not the reverse.
+	 */
+	for (i = 0; i < acl->len; i++) {
+	    if (strcmp(subject_name, acl->val[0].subject) != 0)
+		continue;
+
+	    /* Don't support issuer and anchor checking right now */
+	    if (acl->val[0].issuer)
+		continue;
+	    if (acl->val[0].anchor)
+		continue;
+
+            kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
+                            "exact_match_cert_name");
+	    kdc_log(r->context, config, 5,
+		    "Found matching PKINIT database ACL");
+	    return 0;
+	}
+    }
+
+    for (i = 0; i < principal_mappings.len; i++) {
+	krb5_boolean b;
+
+	b = krb5_principal_compare(r->context,
+				   client->principal,
+				   principal_mappings.val[i].principal);
+	if (b == FALSE)
+	    continue;
+	if (strcmp(principal_mappings.val[i].subject, subject_name) != 0)
+	    continue;
+        kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
+                        "pkinit_mappings_file");
+	kdc_log(r->context, config, 5,
+		"Found matching PKINIT FILE ACL");
+	return 0;
+    }
+
+    ret = KRB5_KDC_ERR_CLIENT_NAME_MISMATCH;
+    krb5_set_error_message(r->context, ret,
+			  "PKINIT no matching principals for %s",
+			  subject_name);
+
+    kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
+                    "denied");
+    kdc_log(r->context, config, 5,
+	    "PKINIT no matching principals for %s",
+	    subject_name);
+
+    return ret;
+}
+
+krb5_error_code
+_kdc_pk_check_client(astgs_request_t r,
+		     pk_client_params *cp,
+		     char **subject_name)
+{
+    krb5_kdc_configuration *config = r->config;
+    hdb_entry *client = r->client;
+    krb5_error_code ret;
+    hx509_name name;
 
     *subject_name = NULL;
 
@@ -2050,112 +2185,11 @@ _kdc_pk_check_client(astgs_request_t r,
 	    "Trying to authorize PKINIT subject DN \"%s\"",
 	    *subject_name);
 
-    ret = hdb_entry_get_pkinit_cert(client, &pc);
-    if (ret == 0 && pc) {
-	hx509_cert cert;
-	size_t j;
-
-	for (j = 0; j < pc->len; j++) {
-	    cert = hx509_cert_init_data(r->context->hx509ctx,
-					pc->val[j].cert.data,
-					pc->val[j].cert.length,
-					NULL);
-	    if (cert == NULL)
-		continue;
-	    ret = hx509_cert_cmp(cert, cp->cert);
-	    hx509_cert_free(cert);
-	    if (ret == 0) {
-                kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
-                                "exact_match_cert");
-		kdc_log(r->context, config, 5,
-			"Found matching PKINIT cert in hdb");
-		return 0;
-	    }
-	}
+    ret = _kdc_pk_check_client_cert(r, cp->cert, *subject_name);
+    if (ret) {
+	free(*subject_name);
+	*subject_name = NULL;
     }
-
-
-    if (config->pkinit_princ_in_cert) {
-	ret = match_rfc_san(r->context, config,
-			    r->context->hx509ctx,
-			    cp->cert,
-			    client->principal);
-	if (ret == 0) {
-            kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
-                            "exact_match_PKINIT_SAN");
-	    kdc_log(r->context, config, 5,
-		    "Found matching PKINIT SAN in certificate");
-	    return 0;
-	}
-	ret = match_ms_upn_san(r->context, config,
-			       r->context->hx509ctx,
-			       cp->cert,
-			       clientdb,
-			       client);
-	if (ret == 0) {
-            kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
-                            "exact_match_UPN_SAN");
-	    kdc_log(r->context, config, 5,
-		    "Found matching MS UPN SAN in certificate");
-	    return 0;
-	}
-    }
-
-    ret = hdb_entry_get_pkinit_acl(client, &acl);
-    if (ret == 0 && acl != NULL) {
-	/*
-	 * Cheat here and compare the generated name with the string
-	 * and not the reverse.
-	 */
-	for (i = 0; i < acl->len; i++) {
-	    if (strcmp(*subject_name, acl->val[0].subject) != 0)
-		continue;
-
-	    /* Don't support issuer and anchor checking right now */
-	    if (acl->val[0].issuer)
-		continue;
-	    if (acl->val[0].anchor)
-		continue;
-
-            kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
-                            "exact_match_cert_name");
-	    kdc_log(r->context, config, 5,
-		    "Found matching PKINIT database ACL");
-	    return 0;
-	}
-    }
-
-    for (i = 0; i < principal_mappings.len; i++) {
-	krb5_boolean b;
-
-	b = krb5_principal_compare(r->context,
-				   client->principal,
-				   principal_mappings.val[i].principal);
-	if (b == FALSE)
-	    continue;
-	if (strcmp(principal_mappings.val[i].subject, *subject_name) != 0)
-	    continue;
-        kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
-                        "pkinit_mappings_file");
-	kdc_log(r->context, config, 5,
-		"Found matching PKINIT FILE ACL");
-	return 0;
-    }
-
-    ret = KRB5_KDC_ERR_CLIENT_NAME_MISMATCH;
-    krb5_set_error_message(r->context, ret,
-			  "PKINIT no matching principals for %s",
-			  *subject_name);
-
-    kdc_audit_addkv((kdc_request_t)r, 0, "authorized_by",
-                    "denied");
-    kdc_log(r->context, config, 5,
-	    "PKINIT no matching principals for %s",
-	    *subject_name);
-
-    free(*subject_name);
-    *subject_name = NULL;
-
     return ret;
 }
 

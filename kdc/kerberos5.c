@@ -710,27 +710,31 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 	goto out;
     }
 
-    ret = heimdal_pkinit_check_client(pkp, r->cname,
-				      r->config->pkinit_princ_in_cert,
+    ret = heimdal_pkinit_check_client(pkp,
 				      _kdc_is_anonymous(r->context, r->client_princ) ||
 				      r->config->historical_anon_realm,
 				      &client_cert, &reject_reason,
 				      &client_cert_der, &client_cert_der_len);
-    if (client_cert_der != NULL && client_cert_der_len > 0) {
+    if (ret == 0 && client_cert_der != NULL && client_cert_der_len > 0) {
 	/*
-	 * heimdal_pkinit_check_client() cannot compute the certificate's
-	 * real X.509 subject DN itself (see the TODO in kdc.rs on
-	 * bindgen/internal-struct-layout risk for krb5_context_data);
-	 * do it here instead with hx509, which already has the correct
-	 * layouts, exactly as the legacy _kdc_pk_check_client() does.
-	 * Best-effort: on any failure client_cert keeps the
-	 * "PKINIT:<principal>" placeholder from the Rust side.
+	 * A certificate was presented (not a certless anonymous request).
+	 * heimdal_pkinit_check_client() only gates the anonymous case; the
+	 * actual authorization decision -- HDB exact-cert-match, PKINIT
+	 * SAN / MS UPN SAN, per-principal HDB ACL, and the file-based
+	 * mapping table -- needs the HDB entry and hx509 with correct
+	 * (non-bindgen'd) struct layouts, neither of which the Rust side
+	 * can safely reach (see kdc.rs's comment on the same risk for
+	 * krb5_kdc_configuration). Do it here instead, via the same
+	 * _kdc_pk_check_client_cert() the legacy hx509-based PKINIT path
+	 * uses, so both backends enforce identical authorization policy.
 	 */
 	hx509_cert cert = hx509_cert_init_data(r->context->hx509ctx,
 					       client_cert_der,
 					       client_cert_der_len,
 					       NULL);
-	if (cert != NULL) {
+	if (cert == NULL) {
+	    ret = KRB5KRB_AP_ERR_BAD_INTEGRITY;
+	} else {
 	    hx509_name name;
 
 	    if (hx509_cert_get_base_subject(r->context->hx509ctx, cert,
@@ -743,6 +747,14 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 		}
 		hx509_name_free(&name);
 	    }
+
+	    if (client_cert)
+		kdc_log(r->context, r->config, 0,
+			"Trying to authorize PKINIT subject DN \"%s\"",
+			client_cert);
+
+	    ret = _kdc_pk_check_client_cert(r, cert,
+					    client_cert ? client_cert : "<unknown>");
 	    hx509_cert_free(cert);
 	}
     }

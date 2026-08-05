@@ -308,16 +308,17 @@ pub unsafe extern "C" fn heimdal_pkinit_mk_pa_reply(
 /// Check client certificate authorization.
 ///
 /// Replaces `_kdc_pk_check_client`.  On success, `*out_subject` is set to
-/// a malloc'd string with the subject name (caller must free).
+/// a malloc'd string with the subject name (caller must free) — this is
+/// only ever the anonymous-client placeholder or a not-yet-authorized
+/// placeholder; see the doc comment on `kdc::check_client`.
 ///
 /// When a certificate was presented (i.e. this was not a certless
 /// anonymous request), `*out_client_cert_der`/`*out_client_cert_der_len`
 /// are also set to a malloc'd copy of the raw client certificate DER on
-/// success, so the caller can compute the certificate's real X.509
-/// subject DN via hx509 (which already has the correct, non-bindgen'd
-/// struct layouts) instead of the `PKINIT:<principal>` placeholder this
-/// function writes to `*out_subject`. This is left unset (null/0) when no
-/// certificate was presented, or on any error.
+/// success, so the caller can run the actual authorization decision
+/// itself via hx509 (which has the correct, non-bindgen'd struct
+/// layouts). This is left unset (null/0) when no certificate was
+/// presented, or on any error.
 ///
 /// # Safety
 ///
@@ -325,8 +326,6 @@ pub unsafe extern "C" fn heimdal_pkinit_mk_pa_reply(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn heimdal_pkinit_check_client(
     params: *const c_void,
-    client_principal: *const c_char,
-    princ_in_cert: i32,
     is_client_anonymous_principal: i32,
     out_subject: *mut *mut c_char,
     out_reject_reason: *mut *mut c_char,
@@ -334,7 +333,6 @@ pub unsafe extern "C" fn heimdal_pkinit_check_client(
     out_client_cert_der_len: *mut usize,
 ) -> bindings::krb5_error_code {
     if params.is_null()
-        || client_principal.is_null()
         || out_subject.is_null()
         || out_reject_reason.is_null()
         || out_client_cert_der.is_null()
@@ -353,16 +351,8 @@ pub unsafe extern "C" fn heimdal_pkinit_check_client(
     }
 
     let cp = unsafe { &*(params as *const PkClientParams) };
-    let princ_str = unsafe { std::ffi::CStr::from_ptr(client_principal) }
-        .to_str()
-        .unwrap_or("");
 
-    match kdc::check_client(
-        cp,
-        princ_str,
-        princ_in_cert != 0,
-        is_client_anonymous_principal != 0,
-    ) {
+    match kdc::check_client(cp, is_client_anonymous_principal != 0) {
         Ok(subject) => {
             let c_subject = match std::ffi::CString::new(subject) {
                 Ok(s) => s,
@@ -371,19 +361,25 @@ pub unsafe extern "C" fn heimdal_pkinit_check_client(
             let Some((buf, _len)) = to_c_buffer(c_subject.as_bytes_with_nul()) else {
                 return libc::ENOMEM as _;
             };
-            unsafe { *out_subject = buf as *mut c_char };
 
-            // Best-effort: if this fails (e.g. OOM), the caller falls
-            // back to the placeholder subject string above rather than
-            // failing the whole (already-authorized) request.
-            if !cp.verified.client_cert_der.is_empty()
-                && let Some((der_buf, der_len)) = to_c_buffer(&cp.verified.client_cert_der)
-            {
+            // When a certificate was presented, the caller's own
+            // authorization check only runs if it sees a non-null
+            // out_client_cert_der — so this must be a hard failure, not a
+            // best-effort skip, or an allocation failure here would look
+            // like an authorized anonymous-style request to the caller
+            // and skip authorization entirely.
+            if !cp.verified.client_cert_der.is_empty() {
+                let Some((der_buf, der_len)) = to_c_buffer(&cp.verified.client_cert_der) else {
+                    unsafe { libc::free(buf as *mut _) };
+                    return libc::ENOMEM as _;
+                };
                 unsafe {
                     *out_client_cert_der = der_buf;
                     *out_client_cert_der_len = der_len;
                 }
             }
+
+            unsafe { *out_subject = buf as *mut c_char };
             0
         }
         Err(kdc::CheckClientError::Code(code, reason)) => {

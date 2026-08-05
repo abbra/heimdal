@@ -97,10 +97,18 @@ heimdal_pkinit_mk_pa_reply(krb5_context context,
                            krb5_keyblock *reply_key);
 
 /*
- * Authorize the client certificate for the requested principal.
- * Replaces _kdc_pk_check_client().
- *
- * princ_in_cert mirrors config->pkinit_princ_in_cert.
+ * Gate certless PKINIT requests and hand back the raw client certificate
+ * DER for the caller to authorize. Replaces _kdc_pk_check_client(), but
+ * unlike it does NOT itself decide whether a presented certificate is
+ * authorized for the requested principal: HDB exact-cert-match, PKINIT
+ * SAN / MS UPN SAN, per-principal HDB ACL, and the file-based mapping
+ * table all need the HDB entry and hx509 with correct (non-bindgen'd)
+ * struct layouts, which this function cannot safely reach. The caller
+ * must run that check itself — see kdc/kerberos5.c's pa_pkinit_validate()
+ * for the expected pattern: parse *out_client_cert_der with
+ * hx509_cert_init_data() and pass it to _kdc_pk_check_client_cert()
+ * (kdc/pkinit.c), the same function the legacy hx509-based PKINIT path
+ * uses, so both backends enforce identical authorization policy.
  *
  * is_client_anonymous_principal must be 1 only when the caller has
  * independently verified (via _kdc_is_anonymous(), not a string compare)
@@ -110,27 +118,24 @@ heimdal_pkinit_mk_pa_reply(krb5_context context,
  * anonymous PKINIT, so passing 1 unconditionally reintroduces a full
  * pre-authentication bypass.
  *
- * On success *out_subject is a malloc'd string (caller frees). *out_subject
- * is set to NULL on entry and only overwritten on success.
+ * On success *out_subject is a malloc'd string (caller frees): either the
+ * anonymous-client placeholder, or (when a certificate was presented) a
+ * not-yet-authorized placeholder the caller is expected to replace once
+ * it has computed the real subject DN. *out_subject is set to NULL on
+ * entry and only overwritten on success.
  *
  * On failure, if *out_reject_reason is non-NULL, it is a malloc'd
  * human-readable string describing why (caller frees); it may remain NULL
  * even on failure (e.g. allocation failure formatting the reason itself).
  *
  * On success, if a certificate was presented (i.e. not a certless
- * anonymous request), *out_client_cert_der/*out_client_cert_der_len are
- * also set to a malloc'd copy of the raw client certificate DER (caller
- * frees), so the caller can compute the certificate's real X.509 subject
- * DN via hx509 (hx509_cert_init_data + hx509_cert_get_base_subject +
- * hx509_name_to_string) for audit-log fidelity, in place of the
- * "PKINIT:<principal>" placeholder in *out_subject. Both are set to
- * NULL/0 on entry and left that way when no certificate was presented or
- * on any error.
+ * anonymous request), *out_client_cert_der and *out_client_cert_der_len
+ * are also set to a malloc'd copy of the raw client certificate DER
+ * (caller frees). Both are set to NULL/0 on entry and left that way when
+ * no certificate was presented or on any error.
  */
 krb5_error_code
 heimdal_pkinit_check_client(const void *params,
-                            const char *client_principal,
-                            int princ_in_cert,
                             int is_client_anonymous_principal,
                             char **out_subject,
                             char **out_reject_reason,
