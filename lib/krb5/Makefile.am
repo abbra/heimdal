@@ -79,6 +79,11 @@ if PKINIT
 LIB_pkinit = ../hx509/libhx509.la
 endif
 
+if PKINIT_RUST
+LIB_pkinit_rust = $(top_builddir)/rust/target/release/libheimdal_pkinit.a
+AM_CPPFLAGS += -DPKINIT_RUST -I$(top_srcdir)/rust/heimdal-pkinit/include
+endif
+
 if have_scc
 use_sqlite = $(LIB_sqlite3)
 endif
@@ -103,6 +108,7 @@ librfc3961_la_LIBADD = \
 	$(top_builddir)/lib/ipc/libheim-ipcc.la \
 	$(top_builddir)/lib/wind/libwind.la \
 	$(LIB_pkinit) \
+	$(LIB_pkinit_rust) \
 	$(use_sqlite) \
 	$(LIB_com_err) \
 	$(LIB_libintl) \
@@ -222,6 +228,7 @@ dist_libkrb5_la_SOURCES =			\
 	pcache.c				\
 	pkinit.c				\
 	pkinit-ec.c				\
+	pkinit-rust.c				\
 	principal.c				\
 	prog_setup.c				\
 	prompter_posix.c			\

@@ -110,6 +110,7 @@ libkdc_la_SOURCES = 		\
 	kerberos5.c		\
 	krb5tgs.c		\
 	pkinit.c		\
+	pkinit-rust.c		\
 	mssfu.c			\
 	log.c			\
 	misc.c			\
@@ -180,8 +181,14 @@ if PKINIT
 LIB_pkinit = $(top_builddir)/lib/hx509/libhx509.la
 endif
 
+if PKINIT_RUST
+LIB_pkinit_rust = $(top_builddir)/rust/target/release/libheimdal_pkinit.a
+AM_CPPFLAGS += -DPKINIT_RUST -I$(top_srcdir)/rust/heimdal-pkinit/include
+endif
+
 libkdc_la_LIBADD = \
 	$(LIB_pkinit) \
+	$(LIB_pkinit_rust) \
 	$(top_builddir)/lib/hdb/libhdb.la \
 	$(top_builddir)/lib/krb5/libkrb5.la \
 	$(top_builddir)/lib/gssapi/libgssapi.la \

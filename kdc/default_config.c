@@ -36,6 +36,9 @@
 #include "kdc_locl.h"
 #include <getarg.h>
 #include <parse_bytes.h>
+#ifdef PKINIT_RUST
+#include "heimdal_pkinit.h"
+#endif
 
 static const char *sysplugin_dirs[] =  {
 #ifdef _WIN32
@@ -404,11 +407,15 @@ krb5_kdc_pkinit_config(krb5_context context, krb5_kdc_configuration *config)
 	if (config->pkinit_kdc_anchors == NULL)
 	    krb5_errx(context, 1, "pkinit enabled but no X509 anchors");
 
+#ifdef PKINIT_RUST
+	heimdal_pkinit_initialize(context, config);
+#else
 	krb5_kdc_pk_initialize(context, config,
 			       config->pkinit_kdc_identity,
 			       config->pkinit_kdc_anchors,
 			       config->pkinit_kdc_cert_pool,
 			       config->pkinit_kdc_revoke);
+#endif /* PKINIT_RUST */
 
     }
 

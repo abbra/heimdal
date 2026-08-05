@@ -526,6 +526,97 @@ _kdc_log_timestamp(astgs_request_t r, const char *type,
 
 #ifdef PKINIT
 
+#ifdef PKINIT_RUST
+#include "heimdal_pkinit.h"
+
+static krb5_error_code
+pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
+{
+    void *pkp = NULL;
+    char *client_cert = NULL;
+    krb5_error_code ret;
+    const char *keyex_name = NULL;
+
+    ret = heimdal_pkinit_rd_padata(r->context, r->config,
+				   pa->padata_value.data,
+				   pa->padata_value.length,
+				   &pkp);
+    if (ret || pkp == NULL) {
+        if (ret == KRB5_KDC_ERR_REVOKED_CERTIFICATE) {
+            ret = KRB5_KDC_ERR_CLIENT_NOT_TRUSTED;
+        } else {
+            ret = KRB5KRB_AP_ERR_BAD_INTEGRITY;
+        }
+	_kdc_r_log(r, 4, "Failed to decode PKINIT PA-DATA -- %s",
+		   r->cname);
+	goto out;
+    }
+
+    ret = heimdal_pkinit_check_client(pkp, r->cname,
+				      r->config->pkinit_princ_in_cert,
+				      &client_cert);
+    if (client_cert)
+	kdc_audit_addkv((kdc_request_t)r, 0, KDC_REQUEST_KV_PKINIT_CLIENT_CERT,
+			"%s", client_cert);
+    if (ret) {
+	_kdc_set_e_text(r, "PKINIT certificate not allowed to "
+			"impersonate principal");
+	kdc_audit_setkv_number((kdc_request_t)r, KDC_REQUEST_KV_AUTH_EVENT,
+			       KDC_AUTH_EVENT_CLIENT_NAME_UNAUTHORIZED);
+	goto out;
+    }
+
+    heimdal_pkinit_keyex_name(pkp, &keyex_name);
+    _kdc_r_log(r, 4, "PKINIT pre-authentication succeeded -- %s using %s",
+	       r->cname, keyex_name ? keyex_name : "unknown");
+
+    {
+	unsigned char *pa_rep_data = NULL;
+	size_t pa_rep_len = 0;
+	char *sname = NULL;
+
+	ret = krb5_unparse_name(r->context, r->server_princ, &sname);
+	if (ret)
+	    goto out;
+
+	ret = heimdal_pkinit_mk_pa_reply(r->context, r->config,
+					 pkp,
+					 0 /* nonce from verified req */,
+					 r->sessionetype,
+					 (const unsigned char *)r->request.data,
+					 r->request.length,
+					 r->cname,
+					 sname,
+					 &pa_rep_data, &pa_rep_len,
+					 &r->reply_key);
+	free(sname);
+	if (ret) {
+	    _kdc_set_e_text(r, "Failed to build PK-INIT reply");
+	    goto out;
+	}
+
+	ret = krb5_padata_add(r->context, r->rep.padata,
+			      KRB5_PADATA_PK_AS_REP,
+			      pa_rep_data, pa_rep_len);
+	if (ret) {
+	    free(pa_rep_data);
+	    goto out;
+	}
+    }
+
+    kdc_audit_setkv_number((kdc_request_t)r, KDC_REQUEST_KV_AUTH_EVENT,
+			   KDC_AUTH_EVENT_PREAUTH_SUCCEEDED);
+
+ out:
+    if (pkp)
+	heimdal_pkinit_free_client_param(pkp);
+    free(client_cert);
+
+    return ret;
+}
+
+#else /* !PKINIT_RUST */
+
 static krb5_error_code
 pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 {
@@ -582,6 +673,8 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 
     return ret;
 }
+
+#endif /* PKINIT_RUST */
 
 #endif /* PKINIT */
 
