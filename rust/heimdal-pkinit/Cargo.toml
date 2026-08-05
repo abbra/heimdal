@@ -9,7 +9,7 @@ description = "PKINIT pre-authentication with post-quantum extensions for Heimda
 crate-type = ["staticlib"]
 
 [dependencies]
-pkinit-core = { git = "https://github.com/abbra/kurbu5-pkinit.git", branch = "main" }
+pkinit-core = { git = "https://github.com/abbra/kurbu5-pkinit.git", rev = "0be85c09117e3fff72940575329f7d2af0631766" }
 libc = "0.2"
 native-ossl = "0.2"
 
