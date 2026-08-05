@@ -106,13 +106,18 @@ heimdal_pkinit_mk_pa_reply(krb5_context context,
  *
  * On success *out_subject is a malloc'd string (caller frees). *out_subject
  * is set to NULL on entry and only overwritten on success.
+ *
+ * On failure, if *out_reject_reason is non-NULL, it is a malloc'd
+ * human-readable string describing why (caller frees); it may remain NULL
+ * even on failure (e.g. allocation failure formatting the reason itself).
  */
 krb5_error_code
 heimdal_pkinit_check_client(const void *params,
                             const char *client_principal,
                             int princ_in_cert,
                             int is_client_anonymous_principal,
-                            char **out_subject);
+                            char **out_subject,
+                            char **out_reject_reason);
 
 /*
  * Free the opaque params allocated by heimdal_pkinit_rd_padata().

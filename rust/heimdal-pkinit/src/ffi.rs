@@ -193,14 +193,22 @@ pub unsafe extern "C" fn heimdal_pkinit_check_client(
     princ_in_cert: i32,
     is_client_anonymous_principal: i32,
     out_subject: *mut *mut c_char,
+    out_reject_reason: *mut *mut c_char,
 ) -> bindings::krb5_error_code {
-    if params.is_null() || client_principal.is_null() || out_subject.is_null() {
+    if params.is_null()
+        || client_principal.is_null()
+        || out_subject.is_null()
+        || out_reject_reason.is_null()
+    {
         return libc::EINVAL as _;
     }
-    // SAFETY: out_subject was just checked non-null above; zeroing it here
-    // means every error path below leaves it well-defined even if the
-    // caller forgot to pre-initialize it.
-    unsafe { *out_subject = std::ptr::null_mut() };
+    // SAFETY: both out-params were just checked non-null above; zeroing
+    // them here means every error path below leaves them well-defined
+    // even if the caller forgot to pre-initialize them.
+    unsafe {
+        *out_subject = std::ptr::null_mut();
+        *out_reject_reason = std::ptr::null_mut();
+    }
 
     let cp = unsafe { &*(params as *const PkClientParams) };
     let princ_str = unsafe { std::ffi::CStr::from_ptr(client_principal) }
@@ -229,7 +237,21 @@ pub unsafe extern "C" fn heimdal_pkinit_check_client(
             }
             0
         }
-        Err(code) => code,
+        Err(kdc::CheckClientError::Code(code, reason)) => {
+            if let Some(reason) = reason {
+                if let Ok(c_reason) = std::ffi::CString::new(reason) {
+                    let len = c_reason.as_bytes_with_nul().len();
+                    let buf = unsafe { libc::malloc(len) as *mut c_char };
+                    if !buf.is_null() {
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(c_reason.as_ptr(), buf, len);
+                            *out_reject_reason = buf;
+                        }
+                    }
+                }
+            }
+            code
+        }
     }
 }
 

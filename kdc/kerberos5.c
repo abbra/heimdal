@@ -543,6 +543,7 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 
     void *pkp = NULL;
     char *client_cert = NULL;
+    char *reject_reason = NULL;
     krb5_error_code ret;
     const char *keyex_name = NULL;
 
@@ -589,13 +590,17 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 				      r->config->pkinit_princ_in_cert,
 				      _kdc_is_anonymous(r->context, r->client_princ) ||
 				      r->config->historical_anon_realm,
-				      &client_cert);
+				      &client_cert, &reject_reason);
     if (client_cert)
 	kdc_audit_addkv((kdc_request_t)r, 0, KDC_REQUEST_KV_PKINIT_CLIENT_CERT,
 			"%s", client_cert);
     if (ret) {
-	_kdc_set_e_text(r, "PKINIT certificate not allowed to "
-			"impersonate principal");
+	if (reject_reason)
+	    _kdc_set_e_text(r, "PKINIT certificate not allowed to "
+			    "impersonate principal: %s", reject_reason);
+	else
+	    _kdc_set_e_text(r, "PKINIT certificate not allowed to "
+			    "impersonate principal");
 	kdc_audit_setkv_number((kdc_request_t)r, KDC_REQUEST_KV_AUTH_EVENT,
 			       KDC_AUTH_EVENT_CLIENT_NAME_UNAUTHORIZED);
 	goto out;
@@ -746,6 +751,7 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
     if (pkp)
 	heimdal_pkinit_free_client_param(pkp);
     free(client_cert);
+    free(reject_reason);
 
     return ret;
 }

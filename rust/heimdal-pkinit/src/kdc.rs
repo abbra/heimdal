@@ -263,12 +263,19 @@ pub(crate) unsafe fn build_reply(
 /// verified data, not the KDC's realm/anonymous-principal policy — so
 /// trusting an unauthenticated caller-supplied flag here would reintroduce
 /// the same bypass.
+pub(crate) enum CheckClientError {
+    /// `krb5_error_code` to return, plus an optional human-readable reason
+    /// (SAN mismatch detail, etc.) for the caller to log / surface via
+    /// `_kdc_set_e_text`.
+    Code(bindings::krb5_error_code, Option<String>),
+}
+
 pub(crate) fn check_client(
     cp: &PkClientParams,
     client_principal: &str,
     princ_in_cert: bool,
     is_client_anonymous_principal: bool,
-) -> Result<String, bindings::krb5_error_code> {
+) -> Result<String, CheckClientError> {
     if cp.verified.client_cert_der.is_empty() {
         if !cp.verified.is_anonymous || !is_client_anonymous_principal {
             // No certificate was presented, but either pkinit-core did not
@@ -276,7 +283,10 @@ pub(crate) fn check_client(
             // principal is not actually the anonymous principal. Refuse —
             // matching kdc/pkinit.c::_kdc_pk_check_client()'s
             // `KRB5KDC_ERR_BADOPTION` on the same condition.
-            return Err(libc::EACCES as bindings::krb5_error_code);
+            return Err(CheckClientError::Code(
+                libc::EACCES as bindings::krb5_error_code,
+                Some("certless request for a non-anonymous principal".into()),
+            ));
         }
         return Ok("<unauthenticated anonymous client>".to_string());
     }
@@ -287,7 +297,14 @@ pub(crate) fn check_client(
         // hdb_entry_get_pkinit_acl), neither of which is implemented on
         // this Rust path yet. Fail closed rather than silently ignore the
         // administrator's setting.
-        return Err(libc::EACCES as bindings::krb5_error_code);
+        return Err(CheckClientError::Code(
+            libc::EACCES as bindings::krb5_error_code,
+            Some(
+                "pkinit_princ_in_cert=no and HDB certificate pinning / PKINIT ACLs \
+                 are not implemented on the Rust PKINIT path"
+                    .into(),
+            ),
+        ));
     }
 
     let result = pkinit_core::certauth::verify_client_san(
@@ -296,7 +313,9 @@ pub(crate) fn check_client(
         true, // once princ_in_cert gating passes, also accept MS UPN SAN,
               // matching _kdc_pk_check_client()'s unconditional UPN fallback
     )
-    .map_err(|_| libc::EINVAL as bindings::krb5_error_code)?;
+    .map_err(|e| {
+        CheckClientError::Code(libc::EINVAL as bindings::krb5_error_code, Some(e.to_string()))
+    })?;
 
     match result {
         pkinit_core::certauth::CertauthResult::Authorized => {
@@ -309,9 +328,10 @@ pub(crate) fn check_client(
             // pointed at the in-tree headers.
             Ok(format!("PKINIT:{}", client_principal))
         }
-        pkinit_core::certauth::CertauthResult::Rejected(_reason) => {
-            Err(libc::EACCES as bindings::krb5_error_code)
-        }
+        pkinit_core::certauth::CertauthResult::Rejected(reason) => Err(CheckClientError::Code(
+            libc::EACCES as bindings::krb5_error_code,
+            Some(reason),
+        )),
     }
 }
 
