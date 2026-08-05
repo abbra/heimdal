@@ -230,8 +230,14 @@ pub unsafe extern "C" fn heimdal_pkinit_mk_pa_reply(
                 unsafe { std::ffi::CStr::from_ptr(server_name) }
             };
 
-            let client_str = c_client.to_str().unwrap_or("");
-            let server_str = c_server.to_str().unwrap_or("");
+            let client_str = match c_client.to_str() {
+                Ok(s) => s,
+                Err(_) => return libc::EINVAL as _,
+            };
+            let server_str = match c_server.to_str() {
+                Ok(s) => s,
+                Err(_) => return libc::EINVAL as _,
+            };
 
             match unsafe {
                 kdc::build_reply(
@@ -682,16 +688,18 @@ pub unsafe extern "C" fn heimdal_pkinit_client_rd_pa_reply(
     let client_str = if client_name.is_null() {
         ""
     } else {
-        unsafe { std::ffi::CStr::from_ptr(client_name) }
-            .to_str()
-            .unwrap_or("")
+        match unsafe { std::ffi::CStr::from_ptr(client_name) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return libc::EINVAL as _,
+        }
     };
     let server_str = if server_name.is_null() {
         ""
     } else {
-        unsafe { std::ffi::CStr::from_ptr(server_name) }
-            .to_str()
-            .unwrap_or("")
+        match unsafe { std::ffi::CStr::from_ptr(server_name) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return libc::EINVAL as _,
+        }
     };
 
     match client.process_as_rep(
