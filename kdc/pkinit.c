@@ -1680,82 +1680,11 @@ _kdc_pk_mk_pa_reply(astgs_request_t r, pk_client_params *cp)
 
         /* generate the session key using the method from RFC6112 */
         if (cp->keyex == USE_DH || cp->keyex == USE_ECDH) {
-            krb5_keyblock kdc_contribution_key;
-            krb5_crypto reply_crypto;
-            krb5_crypto kdccont_crypto;
-            krb5_data p1 = { strlen("PKINIT"), rk_UNCONST("PKINIT")};
-            krb5_data p2 = { strlen("KEYEXCHANGE"), rk_UNCONST("KEYEXCHANGE")};
-            void *kckdata;
-            size_t kcklen;
-            EncryptedData kx;
-            void *kxdata;
-            size_t kxlen;
-
-            ret = krb5_generate_random_keyblock(r->context, sessionetype,
-                                                &kdc_contribution_key);
-            if (ret) {
-                free_PA_PK_AS_REP(&rep);
-                goto out;
-            }
-            ret = krb5_crypto_init(r->context, &cp->reply_key, enctype, &reply_crypto);
-            if (ret) {
-                krb5_free_keyblock_contents(r->context, &kdc_contribution_key);
-                free_PA_PK_AS_REP(&rep);
-                goto out;
-            }
-            ret = krb5_crypto_init(r->context, &kdc_contribution_key, sessionetype, &kdccont_crypto);
-            if (ret) {
-                krb5_crypto_destroy(r->context, reply_crypto);
-                krb5_free_keyblock_contents(r->context, &kdc_contribution_key);
-                free_PA_PK_AS_REP(&rep);
-                goto out;
-            }
-            /* KRB-FX-CF2 */
-            ret = krb5_crypto_fx_cf2(r->context, kdccont_crypto, reply_crypto,
-                                     &p1, &p2, sessionetype, sessionkey);
-            krb5_crypto_destroy(r->context, kdccont_crypto);
-            if (ret) {
-                krb5_crypto_destroy(r->context, reply_crypto);
-                krb5_free_keyblock_contents(r->context, &kdc_contribution_key);
-                free_PA_PK_AS_REP(&rep);
-                goto out;
-            }
-            ASN1_MALLOC_ENCODE(EncryptionKey, kckdata, kcklen,
-                               &kdc_contribution_key, &size, ret);
-            krb5_free_keyblock_contents(r->context, &kdc_contribution_key);
-            if (ret) {
-                krb5_set_error_message(r->context, ret, "encoding of PKINIT-KX Key failed %d", ret);
-                krb5_crypto_destroy(r->context, reply_crypto);
-                free_PA_PK_AS_REP(&rep);
-                goto out;
-            }
-            if (kcklen != size)
-                krb5_abortx(r->context, "Internal ASN.1 encoder error");
-            ret = krb5_encrypt_EncryptedData(r->context, reply_crypto, KRB5_KU_PA_PKINIT_KX,
-                                             kckdata, kcklen, 0, &kx);
-            krb5_crypto_destroy(r->context, reply_crypto);
-            free(kckdata);
-            if (ret) {
-                free_PA_PK_AS_REP(&rep);
-                goto out;
-            }
-            ASN1_MALLOC_ENCODE(EncryptedData, kxdata, kxlen,
-                               &kx, &size, ret);
-            free_EncryptedData(&kx);
+            ret = _kdc_pkinit_kx_reply(r, enctype);
             if (ret) {
                 krb5_set_error_message(r->context, ret,
-                                       "encoding of PKINIT-KX failed %d", ret);
+                                       "PA-PKINIT-KX generation failed %d", ret);
                 free_PA_PK_AS_REP(&rep);
-                goto out;
-            }
-            if (kxlen != size)
-                krb5_abortx(r->context, "Internal ASN.1 encoder error");
-            /* Add PA-PKINIT-KX */
-            ret = krb5_padata_add(r->context, md, KRB5_PADATA_PKINIT_KX, kxdata, kxlen);
-            if (ret) {
-                krb5_set_error_message(r->context, ret,
-                                       "Failed adding PKINIT-KX %d", ret);
-                free(buf);
                 goto out;
             }
         }
