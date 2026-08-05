@@ -29,7 +29,7 @@ pub struct PkClientParams {
 /// Heimdal's original code uses file-level statics (`kdc_identity`,
 /// `moduli`, `principal_mappings`).  We mirror that pattern with a
 /// `Mutex`-protected option.
-static KDC_STATE: Mutex<Option<PkinitKdcState>> = Mutex::new(None);
+pub(crate) static KDC_STATE: Mutex<Option<PkinitKdcState>> = Mutex::new(None);
 
 /// Initialize the KDC PKINIT subsystem.
 ///

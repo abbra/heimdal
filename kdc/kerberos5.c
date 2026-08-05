@@ -2443,6 +2443,30 @@ _kdc_as_rep(astgs_request_t r)
 	    if (pat[n].type == KRB5_PADATA_GSS && !r->config->enable_gss_preauth)
 		continue;
 
+#ifdef PKINIT_RUST
+	    /*
+	     * For PA-PK-AS-REQ, include the KEM algorithm hint so
+	     * PQC-capable clients can select an ML-KEM variant
+	     * before sending their first AS-REQ.
+	     */
+	    if (pat[n].type == KRB5_PADATA_PK_AS_REQ &&
+		r->config->pkinit_pqc_min_algorithm != NULL) {
+		unsigned char *hint_data = NULL;
+		size_t hint_len = 0;
+		heimdal_pkinit_get_hint(r->context, r->config,
+					&hint_data, &hint_len);
+		if (hint_data && hint_len > 0) {
+		    ret = krb5_padata_add(r->context, r->rep.padata,
+					  pat[n].type, hint_data, hint_len);
+		    if (ret) {
+			free(hint_data);
+			goto out;
+		    }
+		    continue;
+		}
+	    }
+#endif /* PKINIT_RUST */
+
 	    ret = krb5_padata_add(r->context, r->rep.padata,
 				  pat[n].type, NULL, 0);
 	    if (ret)

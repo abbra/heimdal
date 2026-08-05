@@ -251,6 +251,53 @@ pub unsafe extern "C" fn heimdal_pkinit_keyex_name(
     unsafe { *out_name = name.as_ptr() as *const c_char };
 }
 
+/// Return the KEM algorithm hint (PA-PK-AS-REQ-Hint) for proactive
+/// advertisement.
+///
+/// On success, `*out_data` / `*out_len` are set to a malloc'd buffer
+/// containing the DER-encoded hint.  Returns empty if no KEM algorithms
+/// are configured.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn heimdal_pkinit_get_hint(
+    _context: bindings::krb5_context,
+    _config: *mut bindings::krb5_kdc_configuration,
+    out_data: *mut *mut u8,
+    out_len: *mut usize,
+) {
+    if out_data.is_null() || out_len.is_null() {
+        return;
+    }
+    unsafe {
+        *out_data = std::ptr::null_mut();
+        *out_len = 0;
+    }
+
+    let guard = crate::kdc::KDC_STATE.lock().unwrap();
+    let state = match guard.as_ref() {
+        Some(s) => s,
+        None => return,
+    };
+
+    let hint_der = state.build_supported_algorithms_hint();
+    if hint_der.is_empty() {
+        return;
+    }
+
+    let buf = unsafe { libc::malloc(hint_der.len()) as *mut u8 };
+    if buf.is_null() {
+        return;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(hint_der.as_ptr(), buf, hint_der.len());
+        *out_data = buf;
+        *out_len = hint_der.len();
+    }
+}
+
 // ─── Client-side FFI ─────────────────────────────────────────────────────
 
 /// Create a new client PKINIT context.

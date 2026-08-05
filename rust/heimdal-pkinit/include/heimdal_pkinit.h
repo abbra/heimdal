@@ -97,6 +97,21 @@ void
 heimdal_pkinit_keyex_name(const void *params,
                           const char **out_name);
 
+/*
+ * Return the KEM algorithm hint for proactive advertisement.
+ * The hint is a DER-encoded PA-PK-AS-REQ-Hint containing the KDC's
+ * supported KEM algorithms.
+ *
+ * On success *out_data / *out_len are set to a malloc'd buffer
+ * (caller frees).  If no KEM algorithms are configured, both are
+ * set to NULL/0.
+ */
+void
+heimdal_pkinit_get_hint(krb5_context context,
+                        krb5_kdc_configuration *config,
+                        unsigned char **out_data,
+                        size_t *out_len);
+
 
 /* ── Client side ───────────────────────────────────────────────────── */
 
