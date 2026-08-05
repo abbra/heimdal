@@ -2682,6 +2682,23 @@ krb5_get_init_creds_opt_set_pkinit_allowed_algs(krb5_context context,
                                                 const char *sig_alg,
                                                 const char *kdf_alg)
 {
+#ifdef PKINIT_RUST
+    /*
+     * opt->opt_private->pk_init_ctx is a Rust pkinit-core handle when
+     * PKINIT_RUST is enabled (see krb5_get_init_creds_opt_set_pkinit()) —
+     * it has a completely different memory layout than
+     * krb5_pk_init_ctx_data, so the field writes below would be type
+     * confusion. pkinit-core selects its own algorithms internally;
+     * per-call algorithm overrides are not yet supported on this path.
+     */
+    (void)dh_alg;
+    (void)sig_alg;
+    (void)kdf_alg;
+    krb5_set_error_message(context, EINVAL,
+			   N_("PKINIT: per-call algorithm selection is not "
+			      "supported with the Rust PKINIT backend", ""));
+    return EINVAL;
+#else
     const heim_oid *oid = NULL;
 
     if (sig_alg) {
@@ -2748,6 +2765,7 @@ krb5_get_init_creds_opt_set_pkinit_allowed_algs(krb5_context context,
     }
 
     return 0;
+#endif /* PKINIT_RUST */
 }
 
 KRB5_LIB_FUNCTION krb5_error_code KRB5_LIB_CALL
@@ -2919,7 +2937,20 @@ krb5_get_init_creds_opt_set_pkinit_user_certs(krb5_context context,
 	return EINVAL;
     }
 
+#ifdef PKINIT_RUST
+    /*
+     * See krb5_get_init_creds_opt_set_pkinit_allowed_algs() above:
+     * pk_init_ctx is a Rust handle here, not a krb5_pk_init_ctx_data.
+     */
+    (void)certs;
+    krb5_set_error_message(context, EINVAL,
+			   N_("PKINIT: setting user certs after context "
+			      "creation is not supported with the Rust "
+			      "PKINIT backend", ""));
+    return EINVAL;
+#else
     return _krb5_pk_set_user_id(context, NULL, opt->opt_private->pk_init_ctx, certs);
+#endif
 }
 
 static int
@@ -3062,5 +3093,17 @@ _krb5_pk_is_kdc_verified(krb5_context context,
 	opt->opt_private->pk_init_ctx == NULL)
 	return FALSE;
 
+#ifdef PKINIT_RUST
+    /*
+     * pk_init_ctx is a Rust handle here, not a krb5_pk_init_ctx_data, so
+     * ->kdc_verified does not exist at this layout. pkinit-core always
+     * verifies the KDC's certificate chain as part of a non-anonymous
+     * exchange (there is no partial/unverified success state to report),
+     * so conservatively report "not verified" rather than reading
+     * unrelated Rust-owned memory as a boolean.
+     */
+    return FALSE;
+#else
     return opt->opt_private->pk_init_ctx->kdc_verified;
+#endif
 }
