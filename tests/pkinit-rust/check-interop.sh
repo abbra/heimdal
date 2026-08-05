@@ -235,7 +235,7 @@ CONF
     if [ ! -f "$WORKDIR/heimdal-db/heimdal.db" ]; then
         mkdir -p "$WORKDIR/heimdal-db"
         export KRB5_CONFIG="$WORKDIR/krb5.conf"
-        "$H_KADMIN" -l -H "$WORKDIR/heimdal-db/heimdal" init \
+        echo "" | "$H_KADMIN" -l -H "$WORKDIR/heimdal-db/heimdal" init \
             --realm-max-ticket-life=1d --realm-max-renewable-life=7d \
             "$REALM" 2>/dev/null || true
         "$H_KADMIN" -l -H "$WORKDIR/heimdal-db/heimdal" add \

@@ -289,8 +289,8 @@ pub unsafe extern "C" fn heimdal_pkinit_keyex_name(
 /// All pointer arguments must be valid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn heimdal_pkinit_get_hint(
-    _context: bindings::krb5_context,
-    _config: *mut bindings::krb5_kdc_configuration,
+    context: bindings::krb5_context,
+    config: *mut bindings::krb5_kdc_configuration,
     out_data: *mut *mut u8,
     out_len: *mut usize,
 ) {
@@ -305,11 +305,21 @@ pub unsafe extern "C" fn heimdal_pkinit_get_hint(
     let guard = crate::kdc::KDC_STATE.lock().unwrap();
     let state = match guard.as_ref() {
         Some(s) => s,
-        None => return,
+        None => {
+            crate::trace::pkinit_trace!(
+                context, config,
+                "PKINIT: get_hint called but KDC state not initialized"
+            );
+            return;
+        }
     };
 
     let hint_der = state.build_supported_algorithms_hint();
     if hint_der.is_empty() {
+        crate::trace::pkinit_trace!(
+            context, config,
+            "PKINIT: get_hint returned empty (no KEM algorithms configured)"
+        );
         return;
     }
 
@@ -322,6 +332,11 @@ pub unsafe extern "C" fn heimdal_pkinit_get_hint(
         *out_data = buf;
         *out_len = hint_der.len();
     }
+    crate::trace::pkinit_trace!(
+        context, config,
+        "PKINIT: get_hint returning {} bytes of KEM algorithm hint",
+        hint_der.len()
+    );
 }
 
 // ─── Client-side FFI ─────────────────────────────────────────────────────

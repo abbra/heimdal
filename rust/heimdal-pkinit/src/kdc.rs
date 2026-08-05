@@ -99,10 +99,18 @@ pub(crate) unsafe fn initialize(
         }
     };
 
+    // Log the KEM algorithms configured
+    let kem_hint_len = state.build_supported_algorithms_hint().len();
+
     let mut guard = KDC_STATE.lock().unwrap();
     *guard = Some(state);
+    drop(guard);
 
-    pkinit_trace!(context, config, "PKINIT: KDC initialized successfully (Rust pkinit-core)");
+    pkinit_trace!(
+        context, config,
+        "PKINIT: KDC initialized (Rust pkinit-core), KEM hint {} bytes",
+        kem_hint_len
+    );
     0
 }
 

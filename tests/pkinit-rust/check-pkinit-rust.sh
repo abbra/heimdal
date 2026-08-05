@@ -250,7 +250,7 @@ DBCONF
 KADMIN_CMD="$KADMIN -l -H $HDB_FILE"
 
 # Initialize database
-$KADMIN_CMD init --realm-max-ticket-life=1d --realm-max-renewable-life=7d \
+echo "" | $KADMIN_CMD init --realm-max-ticket-life=1d --realm-max-renewable-life=7d \
     "$REALM" > "$WORKDIR/kadmin.log" 2>&1
 # Check if db was created (kadmin may report non-fatal iprop errors)
 if [ ! -f "${HDB_FILE}.db" ] && [ ! -f "${HDB_FILE}" ]; then
