@@ -25,6 +25,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
 TOP_SRCDIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WORKDIR="$(mktemp -d /tmp/pkinit-rust-test.XXXXXX)"
 
@@ -102,30 +103,6 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-testfailed() {
-    echo "  FAIL: $1"
-    ec=1
-    if [ "${VERBOSE:-0}" = "1" ]; then
-        echo "--- KDC log tail ---"
-        tail -20 "$WORKDIR/kdc.log" 2>/dev/null || true
-        echo "---"
-    fi
-}
-
-testsuccess() {
-    echo "  OK: $1"
-}
-
-free_port() {
-    python3 -c '
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-' 2>/dev/null || echo 48888
-}
-
 # ── Step 1: Build verification ───────────────────────────────────────
 
 echo "=== Step 1: Build verification ==="
@@ -184,8 +161,8 @@ done
 testsuccess "CA + KDC + client certificates generated"
 
 # Verify EKUs
-KDC_EKU=$(openssl x509 -in "$PKI_DIR/kdc.pem" -noout -text 2>/dev/null | grep "Signing KDC Response" || true)
-CLIENT_EKU=$(openssl x509 -in "$PKI_DIR/client.pem" -noout -text 2>/dev/null | grep "PKINIT Client Auth" || true)
+KDC_EKU=$(openssl x509 -in "$PKI_DIR/kdc.pem" -noout -text 2>/dev/null | grep -E "Signing KDC Response|1\.3\.6\.1\.5\.2\.3\.5" || true)
+CLIENT_EKU=$(openssl x509 -in "$PKI_DIR/client.pem" -noout -text 2>/dev/null | grep -E "PKINIT Client Auth|1\.3\.6\.1\.5\.2\.3\.4" || true)
 [ -n "$KDC_EKU" ] && testsuccess "KDC cert has id-pkkdcekuoid" || testfailed "KDC cert missing EKU"
 [ -n "$CLIENT_EKU" ] && testsuccess "client cert has id-pkekuoid" || testfailed "client cert missing EKU"
 
@@ -237,21 +214,11 @@ export KRB5_CONFIG="$WORKDIR/krb5.conf"
 HDB_FILE="$WORKDIR/db/heimdal"
 mkdir -p "$WORKDIR/db"
 
-# Add database config to krb5.conf
-cat >> "$WORKDIR/krb5.conf" <<DBCONF
-
-[kdc]
-    database = {
-        dbname = $HDB_FILE
-        log_file = $WORKDIR/db/log
-    }
-DBCONF
-
-KADMIN_CMD="$KADMIN -l -H $HDB_FILE"
+KADMIN_CMD=("$KADMIN" -l -H "$HDB_FILE")
 
 # Initialize database
-echo "" | $KADMIN_CMD init --realm-max-ticket-life=1d --realm-max-renewable-life=7d \
-    "$REALM" > "$WORKDIR/kadmin.log" 2>&1
+echo "" | "${KADMIN_CMD[@]}" init --realm-max-ticket-life=1d --realm-max-renewable-life=7d \
+    "$REALM" > "$WORKDIR/kadmin.log" 2>&1 || true
 # Check if db was created (kadmin may report non-fatal iprop errors)
 if [ ! -f "${HDB_FILE}.db" ] && [ ! -f "${HDB_FILE}" ]; then
     testfailed "kadmin init failed (no database file)"
@@ -260,7 +227,7 @@ if [ ! -f "${HDB_FILE}.db" ] && [ ! -f "${HDB_FILE}" ]; then
 fi
 
 # Add test principal
-$KADMIN_CMD add --random-password --use-defaults \
+"${KADMIN_CMD[@]}" add --random-password --use-defaults \
     "${CLIENT}@${REALM}" >> "$WORKDIR/kadmin.log" 2>&1 || true
 
 testsuccess "KDC database initialized"
@@ -397,7 +364,7 @@ if [ -n "$KDC_PID" ]; then
     run_kinit "pk-init (classical, PQC-configured KDC)" || true
 
     # Check KDC log for KEM hint advertisement
-    if grep -qi "KEM\|ML-KEM\|pqc\|hint" "$WORKDIR/kdc.log" 2>/dev/null; then
+    if grep -Eqi "kem|pqc|hint" "$WORKDIR/kdc.log" 2>/dev/null; then
         testsuccess "KDC log mentions KEM/PQC (hint advertisement working)"
     else
         echo "  INFO: KDC log does not mention KEM/PQC (expected if C KDC path is used)"

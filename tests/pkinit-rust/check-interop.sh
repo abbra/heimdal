@@ -25,6 +25,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
 TOP_SRCDIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WORKDIR="$(mktemp -d /tmp/pkinit-interop.XXXXXX)"
 
@@ -100,14 +101,6 @@ cleanup() {
     rm -rf "$WORKDIR"
 }
 trap cleanup EXIT INT TERM
-
-testsuccess() { echo "  ✓ $1"; }
-testfailed()  { echo "  ✗ $1"; ec=1; }
-testskip()    { echo "  ⊘ $1 (skipped)"; }
-
-free_port() {
-    python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
-}
 
 stop_kdc() {
     [ -n "$KDC_PID" ] && kill "$KDC_PID" 2>/dev/null || true
@@ -346,6 +339,9 @@ CONF
 
     if [ ! -f "$WORKDIR/mit-db/principal" ]; then
         # Create the MIT KDB
+        # "master_password" is a fixed placeholder: this KDB is created fresh
+        # in $WORKDIR for this test run only and destroyed on cleanup, so the
+        # stash key never needs to be secret or unique.
         KRB5_CONFIG="$WORKDIR/mit-krb5.conf" \
         KRB5_KDC_PROFILE="$WORKDIR/mit-kdc.conf" \
             kdb5_util create -s -P master_password -r "$REALM" \
@@ -419,8 +415,11 @@ check_kdc_log() {
         testsuccess "$desc"
     else
         testfailed "$desc"
-        [ "${VERBOSE:-0}" = "1" ] && cat "$WORKDIR/kdc.log"
+        if [ "${VERBOSE:-0}" = "1" ]; then
+            cat "$WORKDIR/kdc.log"
+        fi
     fi
+    return 0
 }
 
 # ══════════════════════════════════════════════════════════════════════
@@ -555,16 +554,6 @@ if [ -x "$M_KDC" ] && [ -f "$SETUP_PY" ]; then
 
     if [ -f "$MIT_ENV" ]; then
         # Source the env and run kinit
-        (
-            source "$MIT_ENV"
-            if /usr/bin/kinit \
-                -X "X509_user_identity=FILE:${PKINIT_CLIENT_CERT},${PKINIT_CLIENT_KEY}" \
-                "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" </dev/null 2>"$WORKDIR/kinit-t4-err.log"; then
-                echo "PASS"
-            else
-                echo "FAIL"
-            fi
-        ) | read -r T4_RESULT || T4_RESULT="FAIL"
         T4_RESULT=$(source "$MIT_ENV" && /usr/bin/kinit \
             -X "X509_user_identity=FILE:${PKINIT_CLIENT_CERT},${PKINIT_CLIENT_KEY}" \
             "${PKINIT_PRINCIPAL}@${PKINIT_REALM}" </dev/null 2>"$WORKDIR/kinit-t4-err.log" && echo PASS || echo FAIL)
@@ -624,7 +613,7 @@ if [ -n "$KDC_PID" ]; then
 CONF
 
     run_mit_kinit "MIT(kurbu5, ML-KEM-768)→Heimdal KDC" "$WORKDIR/mit-pqc-client.conf" || true
-    check_kdc_log "ML-KEM\|KEM\|kem" "KDC log shows ML-KEM negotiation" || true
+    check_kdc_log "KEM" "KDC log shows ML-KEM negotiation"
     stop_kdc
 else
     testfailed "Heimdal KDC (PQC) failed to start"
@@ -675,8 +664,11 @@ CONF
         -X "X509_user_identity=FILE:${PKI_DIR}/client.pem,${PKI_DIR}/client.key" \
         -X "X509_anchors=FILE:${PKI_DIR}/ca.pem" \
         "${CLIENT}@${REALM}" 2>"$WORKDIR/kinit-err.log"; then
-        # If kurbu5-pkinit retries with ML-KEM after getting the hint, it might succeed
-        if grep -qi "ML-KEM" "$WORKDIR/kdc.log" 2>/dev/null; then
+        # kinit succeeding here is only a pass if kurbu5-pkinit actually
+        # retried with ML-KEM after the KDC's PQC-required hint — plain
+        # success doesn't prove that happened, so require the KDC's own
+        # "verified AS-REQ via ML-KEM-*" trace line as positive evidence.
+        if grep -qi "verified AS-REQ via ML-KEM" "$WORKDIR/kdc.log" 2>/dev/null; then
             testsuccess "MIT kinit retried with ML-KEM after PQC rejection (auto-negotiation)"
         else
             testfailed "classical PKINIT should have been rejected but succeeded"
@@ -691,7 +683,6 @@ CONF
         fi
     fi
 
-    check_kdc_log "PQC required\|ML-KEM" "KDC log confirms PQC enforcement/negotiation"
     stop_kdc
 else
     testfailed "Heimdal KDC (PQC enforce) failed to start"

@@ -111,28 +111,30 @@ if [ "$SKIP_DEPS" = "1" ]; then
     echo "  (skipped)"
     SKIP=$((SKIP + 1))
 else
-    NEEDED_RPMS="
+    NEEDED_RPMS=(
         autoconf automake libtool bison flex texinfo
         openssl-devel ncurses-devel readline-devel
         libdb-devel e2fsprogs-devel json-c-devel
         heimdal-devel
-    "
+    )
 
     if command -v dnf > /dev/null 2>&1; then
         echo "  Installing via dnf..."
+        rc=0
         run_quiet "$BUILDDIR/deps.log" \
-            sudo dnf install -y $NEEDED_RPMS || true
-        check_result "system dependencies installed" $?
+            sudo dnf install -y "${NEEDED_RPMS[@]}" || rc=$?
+        check_result "system dependencies installed" $rc
     elif command -v apt-get > /dev/null 2>&1; then
         echo "  Installing via apt-get..."
-        NEEDED_DEBS="
+        NEEDED_DEBS=(
             autoconf automake libtool bison flex texinfo
             libssl-dev libncurses-dev libreadline-dev
             libdb-dev libsqlite3-dev libjson-c-dev
-        "
+        )
+        rc=0
         run_quiet "$BUILDDIR/deps.log" \
-            sudo apt-get install -y $NEEDED_DEBS || true
-        check_result "system dependencies installed" $?
+            sudo apt-get install -y "${NEEDED_DEBS[@]}" || rc=$?
+        check_result "system dependencies installed" $rc
     else
         echo "  WARNING: Unknown package manager — install dependencies manually"
         SKIP=$((SKIP + 1))
@@ -317,15 +319,15 @@ if [ ! -x "$HEIMDAL_PREFIX/sbin/kdc" ] && [ ! -x "$HEIMDAL_PREFIX/libexec/kdc" ]
     echo "  Cannot run integration tests without a working Heimdal install"
     FAIL=$((FAIL + 1))
 else
-    MIT_ARG=""
+    MIT_ARG=()
     if [ -n "$MIT_PREFIX" ]; then
-        MIT_ARG="--mit-prefix=$MIT_PREFIX"
+        MIT_ARG=(--mit-prefix="$MIT_PREFIX")
     fi
 
     rc=0
     HEIMDAL_PREFIX="$HEIMDAL_PREFIX" \
     VERBOSE="${VERBOSE}" \
-        "$SCRIPT_DIR/check-pkinit-rust.sh" $MIT_ARG || rc=$?
+        "$SCRIPT_DIR/check-pkinit-rust.sh" "${MIT_ARG[@]}" || rc=$?
 
     check_result "check-pkinit-rust.sh" $rc
 fi
@@ -348,7 +350,7 @@ if [ "$FAIL" -gt 0 ]; then
     echo "  ✗ SOME TESTS FAILED"
     echo ""
     echo "  Logs:"
-    ls -1 "$BUILDDIR"/*.log 2>/dev/null | sed 's/^/    /'
+    ls -1 "$BUILDDIR"/*.log 2>/dev/null | sed 's/^/    /' || true
     exit 1
 else
     echo "  ✓ ALL TESTS PASSED"

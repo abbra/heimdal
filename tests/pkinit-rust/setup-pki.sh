@@ -10,11 +10,12 @@
 set -euo pipefail
 
 OUTDIR="${1:-.}"
-REALM="EXAMPLE.COM"
+REALM="${REALM:-EXAMPLE.COM}"
 KDC_PRINCIPAL="krbtgt/${REALM}"
 CLIENT_PRINCIPAL="testuser"
 
 mkdir -p "$OUTDIR"
+umask 077
 
 # ── CA ────────────────────────────────────────────────────────────────
 
@@ -32,7 +33,7 @@ EOF
 openssl req -new -x509 -key "$OUTDIR/ca.key" \
     -subj "/CN=Test PKINIT CA" \
     -days 3650 \
-    -extensions v3_ca -config <(cat /etc/pki/tls/openssl.cnf "$OUTDIR/ca-ext.cnf" 2>/dev/null || cat /etc/ssl/openssl.cnf "$OUTDIR/ca-ext.cnf" 2>/dev/null || echo "[req]\ndistinguished_name=req_dn\n[req_dn]\n[v3_ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash") \
+    -extensions v3_ca -config <(cat /etc/pki/tls/openssl.cnf "$OUTDIR/ca-ext.cnf" 2>/dev/null || cat /etc/ssl/openssl.cnf "$OUTDIR/ca-ext.cnf" 2>/dev/null || printf '[req]\ndistinguished_name=req_dn\n[req_dn]\n[v3_ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n') \
     -out "$OUTDIR/ca.pem" 2>/dev/null
 
 # ── KDC certificate ──────────────────────────────────────────────────

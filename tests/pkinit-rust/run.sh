@@ -18,8 +18,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/common.sh"
 WORKDIR="$(mktemp -d /tmp/heimdal-pkinit-test.XXXXXX)"
-REALM="PKINIT-TEST.EXAMPLE.COM"
+export REALM="PKINIT-TEST.EXAMPLE.COM"
 CLIENT="testuser"
 HEIMDAL_PREFIX="${HEIMDAL_PREFIX:-/usr/local/heimdal}"
 KDC_PORT="${KDC_PORT:-0}"
@@ -31,7 +32,7 @@ cleanup() {
     fi
     rm -rf "$WORKDIR"
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 echo "=== Working directory: $WORKDIR ==="
 
@@ -43,13 +44,7 @@ bash "$SCRIPT_DIR/setup-pki.sh" "$WORKDIR/pki"
 # ── Step 2: Create krb5.conf ──────────────────────────────────────────
 
 # Find a free port
-KDC_PORT=$(python3 -c '
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-' 2>/dev/null || echo 48888)
+KDC_PORT=$(free_port)
 
 cat > "$WORKDIR/krb5.conf" <<EOF
 [libdefaults]
