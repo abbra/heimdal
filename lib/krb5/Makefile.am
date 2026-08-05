@@ -80,7 +80,7 @@ LIB_pkinit = ../hx509/libhx509.la
 endif
 
 if PKINIT_RUST
-LIB_pkinit_rust = $(top_builddir)/rust/target/release/libheimdal_pkinit.a
+LIB_pkinit_rust = $(top_srcdir)/rust/target/release/libheimdal_pkinit.a
 AM_CPPFLAGS += -DPKINIT_RUST -I$(top_srcdir)/rust/heimdal-pkinit/include
 endif
 
@@ -94,6 +94,7 @@ libkrb5_la_LIBADD = \
 	$(top_builddir)/lib/wind/libwind.la \
 	$(top_builddir)/lib/base/libheimbase.la \
 	$(top_builddir)/lib/hx509/libhx509.la \
+	$(LIB_pkinit_rust) \
 	$(LIB_openssl_crypto) \
 	$(use_sqlite) \
 	$(LIB_com_err) \

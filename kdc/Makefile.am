@@ -182,7 +182,7 @@ LIB_pkinit = $(top_builddir)/lib/hx509/libhx509.la
 endif
 
 if PKINIT_RUST
-LIB_pkinit_rust = $(top_builddir)/rust/target/release/libheimdal_pkinit.a
+LIB_pkinit_rust = $(top_srcdir)/rust/target/release/libheimdal_pkinit.a
 AM_CPPFLAGS += -DPKINIT_RUST -I$(top_srcdir)/rust/heimdal-pkinit/include
 endif
 
