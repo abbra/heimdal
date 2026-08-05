@@ -56,10 +56,8 @@ pub(crate) unsafe fn read_kdc_config(
     }
 
     // pkinit_require_freshness
-    let freshness = unsafe { read_config_string(context, &["kdc", "pkinit_require_freshness"]) };
-    if let Some(ref v) = freshness {
-        kdc_config.require_freshness = matches!(v.as_str(), "yes" | "true" | "1");
-    }
+    kdc_config.require_freshness =
+        unsafe { read_config_bool(context, &["kdc", "pkinit_require_freshness"], false) };
 
     kdc_config
 }
@@ -203,6 +201,40 @@ pub(crate) unsafe fn read_config_strings(
     }
     unsafe { bindings::krb5_config_free_strings(values) };
     result
+}
+
+/// Read a boolean value from Heimdal's config using the same semantics as
+/// every other boolean option in this codebase (case-insensitive
+/// yes/true, or any nonzero value via atoi — see
+/// `krb5_config_get_bool_default` / `heim_config_vget_bool_default` in
+/// `lib/base/config_file.c`), instead of hand-rolled string matching that
+/// can silently disagree with the rest of Heimdal's config parsing.
+///
+/// # Safety
+///
+/// `context` must be valid.
+pub(crate) unsafe fn read_config_bool(
+    context: bindings::krb5_context,
+    path: &[&str; 2],
+    default: bool,
+) -> bool {
+    let Ok(c0) = std::ffi::CString::new(path[0]) else {
+        return default;
+    };
+    let Ok(c1) = std::ffi::CString::new(path[1]) else {
+        return default;
+    };
+    unsafe {
+        bindings::krb5_config_get_bool_default(
+            context,
+            std::ptr::null(),
+            default as std::ffi::c_int,
+            c0.as_ptr(),
+            c1.as_ptr(),
+            std::ptr::null::<std::ffi::c_char>(),
+        )
+        != 0
+    }
 }
 
 /// Read an integer value from Heimdal's config with a default.
