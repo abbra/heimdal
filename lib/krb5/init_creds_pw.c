@@ -1416,6 +1416,15 @@ pkinit_step(krb5_context context,
             _krb5_debug(context, 1, "KDC thinks we did not include a PA checksum!");
             return error_code;
         case KRB5_KDC_ERR_DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED:
+#ifdef PKINIT_RUST
+            /*
+             * pkinit-core handles signature algorithm negotiation
+             * internally.  This error is not retriable from the
+             * Rust path.
+             */
+            _krb5_debug(context, 1, "KDC rejected signature algorithm");
+            return error_code;
+#else
             /*
              * Similar to KRB5_KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED and
              * eminently retriable.
@@ -1436,6 +1445,7 @@ pkinit_step(krb5_context context,
                                    "KDC rejected requested signature algorithm "
                                    "(negotiation support incomplete on client s3ide)");
             return error_code;
+#endif /* PKINIT_RUST */
         case 0:
             break;
         default:

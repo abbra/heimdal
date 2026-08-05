@@ -2879,6 +2879,7 @@ krb5_get_init_creds_opt_set_pkinit(krb5_context context,
 	     * Replace pk_init_ctx with the Rust handle.
 	     * Free the C struct we allocated above.
 	     */
+	    _krb5_debug(context, 1, "PKINIT(rust): client context initialized");
 	    free(opt->opt_private->pk_init_ctx);
 	    opt->opt_private->pk_init_ctx = (krb5_pk_init_ctx)rust_ctx;
 	}
