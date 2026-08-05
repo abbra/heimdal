@@ -587,6 +587,8 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 
     ret = heimdal_pkinit_check_client(pkp, r->cname,
 				      r->config->pkinit_princ_in_cert,
+				      _kdc_is_anonymous(r->context, r->client_princ) ||
+				      r->config->historical_anon_realm,
 				      &client_cert);
     if (client_cert)
 	kdc_audit_addkv((kdc_request_t)r, 0, KDC_REQUEST_KV_PKINIT_CLIENT_CERT,

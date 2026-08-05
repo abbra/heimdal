@@ -94,12 +94,24 @@ heimdal_pkinit_mk_pa_reply(krb5_context context,
  * Authorize the client certificate for the requested principal.
  * Replaces _kdc_pk_check_client().
  *
- * On success *out_subject is a malloc'd string (caller frees).
+ * princ_in_cert mirrors config->pkinit_princ_in_cert.
+ *
+ * is_client_anonymous_principal must be 1 only when the caller has
+ * independently verified (via _kdc_is_anonymous(), not a string compare)
+ * that the *requested* principal is the well-known anonymous principal or
+ * that historical_anon_realm compatibility applies. This function has no
+ * other way to enforce that a certless request is actually authorized for
+ * anonymous PKINIT, so passing 1 unconditionally reintroduces a full
+ * pre-authentication bypass.
+ *
+ * On success *out_subject is a malloc'd string (caller frees). *out_subject
+ * is set to NULL on entry and only overwritten on success.
  */
 krb5_error_code
 heimdal_pkinit_check_client(const void *params,
                             const char *client_principal,
-                            int allow_upn,
+                            int princ_in_cert,
+                            int is_client_anonymous_principal,
                             char **out_subject);
 
 /*

@@ -190,19 +190,29 @@ pub unsafe extern "C" fn heimdal_pkinit_mk_pa_reply(
 pub unsafe extern "C" fn heimdal_pkinit_check_client(
     params: *const c_void,
     client_principal: *const c_char,
-    allow_upn: i32,
+    princ_in_cert: i32,
+    is_client_anonymous_principal: i32,
     out_subject: *mut *mut c_char,
 ) -> bindings::krb5_error_code {
     if params.is_null() || client_principal.is_null() || out_subject.is_null() {
         return libc::EINVAL as _;
     }
+    // SAFETY: out_subject was just checked non-null above; zeroing it here
+    // means every error path below leaves it well-defined even if the
+    // caller forgot to pre-initialize it.
+    unsafe { *out_subject = std::ptr::null_mut() };
 
     let cp = unsafe { &*(params as *const PkClientParams) };
     let princ_str = unsafe { std::ffi::CStr::from_ptr(client_principal) }
         .to_str()
         .unwrap_or("");
 
-    match kdc::check_client(cp, princ_str, allow_upn != 0) {
+    match kdc::check_client(
+        cp,
+        princ_str,
+        princ_in_cert != 0,
+        is_client_anonymous_principal != 0,
+    ) {
         Ok(subject) => {
             let c_subject = match std::ffi::CString::new(subject) {
                 Ok(s) => s,

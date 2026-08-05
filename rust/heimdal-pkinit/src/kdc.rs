@@ -245,33 +245,120 @@ pub(crate) unsafe fn build_reply(
 
 /// Check whether a client certificate is authorized for a given principal.
 ///
-/// This replaces Heimdal's `_kdc_pk_check_client`.  The implementation
+/// This replaces Heimdal's `_kdc_pk_check_client`. The implementation
 /// delegates to `pkinit-core`'s `certauth` module.
+///
+/// `princ_in_cert` mirrors Heimdal's `pkinit_princ_in_cert` config knob: the
+/// C implementation this replaces (`_kdc_pk_check_client` in
+/// `kdc/pkinit.c`) only attempts SAN/UPN authorization when it is true;
+/// when false it falls back to HDB certificate pinning / PKINIT ACLs, which
+/// are not yet implemented on this path (see the `Err` branch below).
+///
+/// `is_client_anonymous_principal` must be true only when the KDC has
+/// independently verified (via `_kdc_is_anonymous()`/
+/// `krb5_principal_is_anonymous()`, NOT a string compare) that the
+/// requested principal is the well-known anonymous principal, or that
+/// `historical_anon_realm` compatibility applies. This function does not
+/// and cannot verify that itself — it only sees the request-scoped
+/// verified data, not the KDC's realm/anonymous-principal policy — so
+/// trusting an unauthenticated caller-supplied flag here would reintroduce
+/// the same bypass.
 pub(crate) fn check_client(
     cp: &PkClientParams,
     client_principal: &str,
-    allow_upn: bool,
+    princ_in_cert: bool,
+    is_client_anonymous_principal: bool,
 ) -> Result<String, bindings::krb5_error_code> {
     if cp.verified.client_cert_der.is_empty() {
-        // Anonymous PKINIT — no cert to check
+        if !cp.verified.is_anonymous || !is_client_anonymous_principal {
+            // No certificate was presented, but either pkinit-core did not
+            // classify this as an anonymous exchange, or the *requested*
+            // principal is not actually the anonymous principal. Refuse —
+            // matching kdc/pkinit.c::_kdc_pk_check_client()'s
+            // `KRB5KDC_ERR_BADOPTION` on the same condition.
+            return Err(libc::EACCES as bindings::krb5_error_code);
+        }
         return Ok("<unauthenticated anonymous client>".to_string());
+    }
+
+    if !princ_in_cert {
+        // pkinit_princ_in_cert = no: the C path falls back to HDB exact
+        // certificate pinning / PKINIT ACLs (hdb_entry_get_pkinit_cert /
+        // hdb_entry_get_pkinit_acl), neither of which is implemented on
+        // this Rust path yet. Fail closed rather than silently ignore the
+        // administrator's setting.
+        return Err(libc::EACCES as bindings::krb5_error_code);
     }
 
     let result = pkinit_core::certauth::verify_client_san(
         &cp.verified.client_cert_der,
         client_principal,
-        allow_upn,
+        true, // once princ_in_cert gating passes, also accept MS UPN SAN,
+              // matching _kdc_pk_check_client()'s unconditional UPN fallback
     )
     .map_err(|_| libc::EINVAL as bindings::krb5_error_code)?;
 
     match result {
         pkinit_core::certauth::CertauthResult::Authorized => {
-            // TODO: extract actual subject name from cert
+            // TODO(follow-up): extract the real certificate subject DN for
+            // audit fidelity. Doing so today would require dereferencing
+            // krb5_context_data.hx509ctx, an internal struct whose layout
+            // is not guaranteed to match what bindgen generates from the
+            // *installed* Heimdal headers (see config.rs's comment on the
+            // same risk for krb5_kdc_configuration) until build.rs is
+            // pointed at the in-tree headers.
             Ok(format!("PKINIT:{}", client_principal))
         }
-        pkinit_core::certauth::CertauthResult::Rejected(reason) => {
-            let _ = reason; // logged by caller
+        pkinit_core::certauth::CertauthResult::Rejected(_reason) => {
             Err(libc::EACCES as bindings::krb5_error_code)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pkinit_core::server::{KeyExchangeType, VerifiedRequest};
+
+    fn anon_verified_request() -> VerifiedRequest {
+        VerifiedRequest {
+            client_cert_der: vec![],
+            client_dh_public: vec![],
+            nonce: 1,
+            supported_kdfs: vec![],
+            client_dh_nonce: None,
+            is_anonymous: true,
+            key_exchange: KeyExchangeType::Dh(pkinit_core::constants::DhGroup::Oakley2048),
+        }
+    }
+
+    #[test]
+    fn check_client_rejects_certless_request_for_non_anonymous_principal() {
+        let cp = PkClientParams {
+            verified: anon_verified_request(),
+            subject_name: None,
+        };
+        // Attacker asks for "administrator@EXAMPLE.COM" with no cert at all.
+        // Without the anonymous-principal check this incorrectly succeeds.
+        let result = check_client(&cp, "administrator@EXAMPLE.COM", true, false);
+        assert!(
+            result.is_err(),
+            "certless request for a non-anonymous principal must be rejected"
+        );
+    }
+
+    #[test]
+    fn check_client_allows_certless_request_for_true_anonymous_principal() {
+        let cp = PkClientParams {
+            verified: anon_verified_request(),
+            subject_name: None,
+        };
+        let result = check_client(
+            &cp,
+            "WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS",
+            true,
+            true, // caller confirms the requested principal IS the anonymous principal
+        );
+        assert!(result.is_ok());
     }
 }
