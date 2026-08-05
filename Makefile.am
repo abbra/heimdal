@@ -10,13 +10,6 @@ SUBDIRS=  include lib kuser kdc admin kadmin kpasswd
 SUBDIRS+= $(kcm_dir) appl tools tests packages etc po
 
 if PKINIT_RUST
-# Build the Rust PKINIT adapter before libkdc / libkrb5 link against it
-pkinit-rust-build:
-	$(MAKE) -C $(top_srcdir)/rust all
-
-lib/krb5/libkrb5.la: pkinit-rust-build
-kdc/libkdc.la: pkinit-rust-build
-
 clean-local-pkinit-rust:
 	$(MAKE) -C $(top_srcdir)/rust clean
 

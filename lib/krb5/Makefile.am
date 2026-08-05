@@ -80,8 +80,13 @@ LIB_pkinit = ../hx509/libhx509.la
 endif
 
 if PKINIT_RUST
-LIB_pkinit_rust = $(top_srcdir)/rust/target/release/libheimdal_pkinit.a -lssl -lcrypto -lpthread -ldl -lm
+LIB_pkinit_rust = $(top_srcdir)/rust/target/release/libheimdal_pkinit.a $(LIB_openssl_crypto) $(PTHREAD_LIBADD) -ldl -lm
 AM_CPPFLAGS += -DPKINIT_RUST -I$(top_srcdir)/rust/heimdal-pkinit/include
+
+$(top_srcdir)/rust/target/release/libheimdal_pkinit.a: FORCE
+	$(MAKE) -C $(top_srcdir)/rust all
+
+.PHONY: FORCE
 endif
 
 if have_scc
@@ -109,7 +114,6 @@ librfc3961_la_LIBADD = \
 	$(top_builddir)/lib/ipc/libheim-ipcc.la \
 	$(top_builddir)/lib/wind/libwind.la \
 	$(LIB_pkinit) \
-	$(LIB_pkinit_rust) \
 	$(use_sqlite) \
 	$(LIB_com_err) \
 	$(LIB_libintl) \
@@ -281,6 +285,10 @@ endif
 
 libkrb5_la_DEPENDENCIES =			\
 	version-script.map
+
+if PKINIT_RUST
+libkrb5_la_DEPENDENCIES += $(top_srcdir)/rust/target/release/libheimdal_pkinit.a
+endif
 
 libkrb5_la_LDFLAGS = -version-info 26:0:0
 if FRAMEWORK_COREFOUNDATION

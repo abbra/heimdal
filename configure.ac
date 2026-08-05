@@ -166,6 +166,9 @@ AM_CONDITIONAL(PKINIT, test "$enable_pk_init" != no)
 AC_ARG_ENABLE(pkinit-rust,
 	AS_HELP_STRING([--enable-pkinit-rust],
 		[use Rust pkinit-core for PKINIT with post-quantum support]))
+if test "$enable_pkinit_rust" = yes; then
+	AC_DEFINE([PKINIT_RUST], 1, [Define to use Rust pkinit-core for PKINIT.])
+fi
 AM_CONDITIONAL(PKINIT_RUST, test "$enable_pkinit_rust" = yes)
 
 AC_ARG_ENABLE(digest, 

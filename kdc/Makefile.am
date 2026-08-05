@@ -182,13 +182,11 @@ LIB_pkinit = $(top_builddir)/lib/hx509/libhx509.la
 endif
 
 if PKINIT_RUST
-LIB_pkinit_rust = $(top_srcdir)/rust/target/release/libheimdal_pkinit.a -lssl -lcrypto -lpthread -ldl -lm
 AM_CPPFLAGS += -DPKINIT_RUST -I$(top_srcdir)/rust/heimdal-pkinit/include
 endif
 
 libkdc_la_LIBADD = \
 	$(LIB_pkinit) \
-	$(LIB_pkinit_rust) \
 	$(top_builddir)/lib/hdb/libhdb.la \
 	$(top_builddir)/lib/krb5/libkrb5.la \
 	$(top_builddir)/lib/gssapi/libgssapi.la \

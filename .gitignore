@@ -13,6 +13,7 @@
 .dirstamp
 .libs/
 Makefile
+!/rust/Makefile
 Makefile.in
 rs_state.ini
 tags
