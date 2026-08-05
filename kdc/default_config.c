@@ -329,6 +329,11 @@ krb5_kdc_get_config(krb5_context context, krb5_kdc_configuration **config)
 	krb5_config_get_string(context, NULL,
 			       "kdc", "pkinit_pqc_min_algorithm", NULL);
 
+    c->pkinit_require_pqc =
+	krb5_config_get_bool_default(context, NULL, FALSE,
+				     "kdc", "pkinit_require_pqc",
+				     NULL);
+
     c->pkinit_require_freshness =
 	krb5_config_get_bool_default(context, NULL, FALSE,
 				     "kdc", "pkinit_require_freshness",

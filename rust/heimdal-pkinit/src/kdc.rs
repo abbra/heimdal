@@ -14,6 +14,10 @@ use crate::bindings;
 use crate::o2k::HeimdalOctetString2Key;
 use crate::trace::pkinit_trace;
 
+/// `KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED` / error 65.
+/// Used when the KDC rejects the client's key exchange parameters.
+const KRB5KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED: bindings::krb5_error_code = -1765328319;
+
 /// Opaque state passed between `_kdc_pk_rd_padata` and `_kdc_pk_mk_pa_reply`.
 ///
 /// In Heimdal's C code this is `pk_client_params`.  We replace it with a
@@ -119,6 +123,7 @@ pub(crate) unsafe fn verify_padata(
     pa_data_len: usize,
     max_skew: i64,
     current_time: i64,
+    require_pqc: bool,
 ) -> Result<Box<PkClientParams>, bindings::krb5_error_code> {
     let guard = KDC_STATE.lock().unwrap();
     let state = guard.as_ref().ok_or(libc::EINVAL as bindings::krb5_error_code)?;
@@ -135,6 +140,25 @@ pub(crate) unsafe fn verify_padata(
                 context, config,
                 "PKINIT: verified AS-REQ via {}", verified.key_exchange
             );
+
+            // PQC enforcement: reject classical key exchange when PQC
+            // is required.  This is a local policy check — pkinit-core
+            // accepts both DH and KEM when KEM algorithms are configured.
+            if require_pqc {
+                match verified.key_exchange {
+                    pkinit_core::server::KeyExchangeType::Dh(_) => {
+                        pkinit_trace!(
+                            context, config,
+                            "PKINIT: rejecting classical DH — PQC required"
+                        );
+                        return Err(KRB5KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED);
+                    }
+                    pkinit_core::server::KeyExchangeType::Kem(_) => {
+                        // KEM is acceptable
+                    }
+                }
+            }
+
             Ok(Box::new(PkClientParams {
                 verified,
                 subject_name: None,

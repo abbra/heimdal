@@ -406,6 +406,83 @@ else
     testfailed "KDC did not restart"
 fi
 
+# ── Step 6b: PQC enforcement (reject classical when PQC required) ────
+
+echo ""
+echo "=== Step 6b: PQC enforcement ==="
+
+# Stop existing KDC
+if [ -n "$KDC_PID" ]; then
+    kill "$KDC_PID" 2>/dev/null || true
+    wait "$KDC_PID" 2>/dev/null || true
+    KDC_PID=""
+fi
+
+# Write config with PQC enforcement
+cat > "$WORKDIR/krb5.conf" <<CONF
+[libdefaults]
+    default_realm = ${REALM}
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+
+[realms]
+    ${REALM} = {
+        kdc = 127.0.0.1:${KDC_PORT}
+    }
+
+[kdc]
+    enable-pkinit = true
+    pkinit_identity = FILE:${PKI_DIR}/kdc.pem,${PKI_DIR}/kdc.key
+    pkinit_anchors = FILE:${PKI_DIR}/ca.pem
+    pkinit_principal_in_certificate = true
+    pkinit_dh_min_bits = 0
+    pkinit_pqc_min_algorithm = ML-KEM-768
+    pkinit_require_pqc = true
+    database = {
+        dbname = ${WORKDIR}/db/heimdal
+        log_file = ${WORKDIR}/db/log
+    }
+
+[logging]
+    kdc = FILE:${WORKDIR}/kdc.log
+CONF
+
+> "$WORKDIR/kdc.log"
+"$KDC" --addresses=127.0.0.1 --ports="$KDC_PORT" \
+    --config-file="$WORKDIR/krb5.conf" \
+    --detach --testing \
+    2>> "$WORKDIR/kdc.log" || true
+sleep 1
+KDC_PID=$(lsof -ti "tcp:${KDC_PORT}" 2>/dev/null | head -1 || true)
+if [ -z "$KDC_PID" ]; then
+    KDC_PID=$(pgrep -f "kdc.*${KDC_PORT}" 2>/dev/null | head -1 || true)
+fi
+
+if [ -n "$KDC_PID" ]; then
+    testsuccess "KDC restarted with pkinit_require_pqc=true"
+
+    # Classical PKINIT should be REJECTED when PQC is required
+    echo "Trying pk-init (classical, should be REJECTED)"; > "$WORKDIR/kdc.log"
+    if "$KINIT" \
+        -C "FILE:${PKI_DIR}/client.pem,${PKI_DIR}/client.key" \
+        --x509-anchors="FILE:${PKI_DIR}/ca.pem" \
+        "${CLIENT}@${REALM}" 2>"$WORKDIR/kinit-pqc-err.log"; then
+        testfailed "classical PKINIT should have been rejected but succeeded"
+    else
+        testsuccess "classical PKINIT correctly rejected by PQC-enforcing KDC"
+    fi
+
+    # Verify the KDC log shows the PQC enforcement message
+    if grep -q "PQC required" "$WORKDIR/kdc.log" 2>/dev/null; then
+        testsuccess "KDC log confirms PQC enforcement"
+    else
+        testfailed "KDC log missing PQC enforcement message"
+        [ "${VERBOSE:-0}" = "1" ] && cat "$WORKDIR/kdc.log"
+    fi
+else
+    testfailed "KDC did not restart with pkinit_require_pqc=true"
+fi
+
 # ── Step 7: Cross-implementation tests (optional) ────────────────────
 
 echo ""

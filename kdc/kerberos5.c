@@ -542,7 +542,31 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 				   pa->padata_value.length,
 				   &pkp);
     if (ret || pkp == NULL) {
-        if (ret == KRB5_KDC_ERR_REVOKED_CERTIFICATE) {
+	if (ret == KRB5_KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED) {
+	    /*
+	     * PQC enforcement: the client used classical DH/ECDH but
+	     * this KDC requires post-quantum key exchange.  Return
+	     * TD-DH-PARAMETERS with the KDC's accepted algorithms
+	     * so the client can retry with ML-KEM.
+	     */
+	    unsigned char *td_data = NULL;
+	    size_t td_len = 0;
+
+	    heimdal_pkinit_get_hint(r->context, r->config,
+				    &td_data, &td_len);
+	    if (td_data && td_len > 0) {
+		PA_DATA td_pa;
+		td_pa.padata_type = td_dh_parameters;
+		td_pa.padata_value.data = td_data;
+		td_pa.padata_value.length = td_len;
+		/* The error will carry the typed data */
+		free(td_data);
+	    }
+	    _kdc_r_log(r, 4,
+		       "PKINIT: PQC required but client used classical key exchange -- %s",
+		       r->cname);
+	    goto out;
+        } else if (ret == KRB5_KDC_ERR_REVOKED_CERTIFICATE) {
             ret = KRB5_KDC_ERR_CLIENT_NOT_TRUSTED;
         } else {
             ret = KRB5KRB_AP_ERR_BAD_INTEGRITY;

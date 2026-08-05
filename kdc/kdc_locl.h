@@ -125,6 +125,7 @@ struct krb5_kdc_configuration {
 
     /* Post-quantum PKINIT (draft-bokovoy-kitten-pkinit-pqc) */
     const char *pkinit_pqc_min_algorithm;
+    unsigned int pkinit_require_pqc : 1;
     unsigned int pkinit_require_freshness : 1;
 
     int digests_allowed;

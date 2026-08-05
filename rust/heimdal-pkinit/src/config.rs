@@ -83,7 +83,7 @@ pub(crate) unsafe fn read_client_config(
 /// # Safety
 ///
 /// `context` must be valid.
-unsafe fn read_config_string(
+pub(crate) unsafe fn read_config_string(
     context: bindings::krb5_context,
     path: &[&str],
 ) -> Option<String> {

@@ -77,7 +77,15 @@ pub unsafe extern "C" fn heimdal_pkinit_rd_padata(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    match unsafe { kdc::verify_padata(context, config, pa_data, pa_data_len, max_skew, current_time) } {
+    // Check if PQC is required
+    let require_pqc = unsafe {
+        crate::config::read_config_string(context, &["kdc", "pkinit_require_pqc"])
+    };
+    let require_pqc = require_pqc
+        .as_deref()
+        .is_some_and(|v| matches!(v, "yes" | "true" | "1"));
+
+    match unsafe { kdc::verify_padata(context, config, pa_data, pa_data_len, max_skew, current_time, require_pqc) } {
         Ok(cp) => {
             unsafe { *out_params = Box::into_raw(cp) as *mut c_void };
             0
