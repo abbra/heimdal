@@ -239,8 +239,6 @@ else
             --prefix="$PREFIX" \
             --enable-pkinit-rust \
             --with-openssl \
-            --disable-afs-support \
-            --disable-otp \
             ) || rc=$?
     check_result "configure" $rc
     if [ $rc -ne 0 ]; then

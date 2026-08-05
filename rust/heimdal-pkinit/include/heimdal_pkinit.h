@@ -19,6 +19,17 @@
 #include <krb5.h>
 #include <stddef.h>
 
+/*
+ * Forward-declare krb5_kdc_configuration so this header can be
+ * included from both KDC code (which has kdc.h / kdc_locl.h) and
+ * client code (which does not).  The KDC functions only take
+ * pointers, so a forward declaration suffices.
+ */
+#ifndef __KDC_H__
+struct krb5_kdc_configuration;
+typedef struct krb5_kdc_configuration krb5_kdc_configuration;
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
