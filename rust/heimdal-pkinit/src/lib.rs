@@ -19,6 +19,7 @@ mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
+mod client;
 mod config;
 mod ffi;
 mod hx509_bridge;

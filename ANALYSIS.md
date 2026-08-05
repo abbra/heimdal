@@ -398,18 +398,21 @@ need to be wrapped in the Rust adapter.
 
 ### Phase 1: KDC-side classical PKINIT (DH + ECDH)
 
-1. Create `heimdal-pkinit` crate with bindgen for Heimdal headers
-2. Implement `HeimdalOctetString2Key` (wrapping `krb5_random_to_key`)
-3. Implement C-callable `_kdc_pk_rd_padata` → `PkinitKdcState::verify_as_req`
-4. Implement C-callable `_kdc_pk_mk_pa_reply` → `PkinitKdcState::build_as_rep`
-5. Implement `_kdc_pk_check_client` → `pkinit-core::certauth`
-6. Interop test against Heimdal's `kinit` (client stays C)
+1. ✅ Create `heimdal-pkinit` crate with bindgen for Heimdal headers
+2. ✅ Implement `HeimdalOctetString2Key` (wrapping `krb5_random_to_key`)
+3. ✅ Implement C-callable `heimdal_pkinit_rd_padata` → `PkinitKdcState::verify_as_req`
+4. ✅ Implement C-callable `heimdal_pkinit_mk_pa_reply` → `PkinitKdcState::build_as_rep`
+5. ✅ Implement `heimdal_pkinit_check_client` → `pkinit-core::certauth`
+6. Patch Heimdal `kdc/kerberos5.c` to call Rust FFI + wire into build system
+7. Interop test against Heimdal's `kinit` (client stays C)
 
 ### Phase 2: Client-side classical PKINIT
 
-7. Implement C-callable `_krb5_pk_mk_padata` → `PkinitClientState::build_as_req`
-8. Implement C-callable `_krb5_pk_rd_pa_reply` → `PkinitClientState::process_as_rep`
-9. Cross-test: Rust client ↔ Rust KDC, Rust client ↔ C KDC
+8. ✅ Implement C-callable `heimdal_pkinit_client_mk_padata` → `PkinitClientState::build_as_req`
+9. ✅ Implement C-callable `heimdal_pkinit_client_rd_pa_reply` → `PkinitClientState::process_as_rep`
+10. ✅ Implement `heimdal_pkinit_client_tryagain` for retry handling
+11. Patch Heimdal `lib/krb5/pkinit.c` to call Rust FFI
+12. Cross-test: Rust client ↔ Rust KDC, Rust client ↔ C KDC
 
 ### Phase 3: Post-quantum extensions
 

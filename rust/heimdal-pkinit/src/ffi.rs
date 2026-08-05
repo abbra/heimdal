@@ -12,6 +12,7 @@ use std::ffi::c_void;
 use std::os::raw::c_char;
 
 use crate::bindings;
+use crate::client::PkinitClientCtx;
 use crate::kdc::{self, PkClientParams};
 
 /// Initialize the PKINIT subsystem.
@@ -248,4 +249,285 @@ pub unsafe extern "C" fn heimdal_pkinit_keyex_name(
         },
     };
     unsafe { *out_name = name.as_ptr() as *const c_char };
+}
+
+// ─── Client-side FFI ─────────────────────────────────────────────────────
+
+/// Create a new client PKINIT context.
+///
+/// Replaces `_krb5_pk_set_user_id` + identity loading.  On success,
+/// `*out_ctx` is set to an opaque pointer that must be passed to the
+/// other `heimdal_pkinit_client_*` functions and eventually freed with
+/// `heimdal_pkinit_client_free`.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn heimdal_pkinit_client_init(
+    context: bindings::krb5_context,
+    identity: *const c_char,
+    anchors: *const *const c_char,
+    anchors_len: usize,
+    anonymous: i32,
+    server_principal: *const c_char,
+    out_ctx: *mut *mut c_void,
+) -> bindings::krb5_error_code {
+    if out_ctx.is_null() {
+        return libc::EINVAL as _;
+    }
+    unsafe { *out_ctx = std::ptr::null_mut() };
+
+    let identity_str = if identity.is_null() {
+        ""
+    } else {
+        match unsafe { std::ffi::CStr::from_ptr(identity) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return libc::EINVAL as _,
+        }
+    };
+
+    let anchor_strs: Vec<&str> = if anchors.is_null() || anchors_len == 0 {
+        vec![]
+    } else {
+        let slice = unsafe { std::slice::from_raw_parts(anchors, anchors_len) };
+        slice
+            .iter()
+            .filter_map(|&p| {
+                if p.is_null() {
+                    None
+                } else {
+                    unsafe { std::ffi::CStr::from_ptr(p) }.to_str().ok()
+                }
+            })
+            .collect()
+    };
+
+    let server_str = if server_principal.is_null() {
+        None
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(server_principal) }
+            .to_str()
+            .ok()
+    };
+
+    match unsafe {
+        crate::client::init_client_ctx(
+            context,
+            identity_str,
+            &anchor_strs,
+            anonymous != 0,
+            server_str,
+        )
+    } {
+        Ok(ctx) => {
+            unsafe { *out_ctx = Box::into_raw(ctx) as *mut c_void };
+            0
+        }
+        Err(code) => code,
+    }
+}
+
+/// Set the freshness token on a client context.
+///
+/// # Safety
+///
+/// `ctx` must be a valid pointer from `heimdal_pkinit_client_init`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn heimdal_pkinit_client_set_freshness(
+    ctx: *mut c_void,
+    token: *const u8,
+    token_len: usize,
+) {
+    if ctx.is_null() || token.is_null() || token_len == 0 {
+        return;
+    }
+    let client = unsafe { &mut *(ctx as *mut PkinitClientCtx) };
+    let data = unsafe { std::slice::from_raw_parts(token, token_len) }.to_vec();
+    client.set_freshness_token(data);
+}
+
+/// Process a PKINIT hint (KEM algorithm advertisement) from the KDC.
+///
+/// # Safety
+///
+/// `ctx` must be a valid pointer from `heimdal_pkinit_client_init`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn heimdal_pkinit_client_process_hint(
+    ctx: *mut c_void,
+    hint_data: *const u8,
+    hint_len: usize,
+) {
+    if ctx.is_null() || hint_data.is_null() || hint_len == 0 {
+        return;
+    }
+    let client = unsafe { &mut *(ctx as *mut PkinitClientCtx) };
+    let hint = unsafe { std::slice::from_raw_parts(hint_data, hint_len) };
+    client.process_hint(hint);
+}
+
+/// Build the PA-PK-AS-REQ PA-DATA value.
+///
+/// On success, `*out_data` and `*out_len` are set to the DER-encoded
+/// PA-PK-AS-REQ (caller must free with `free()`).
+///
+/// # Safety
+///
+/// All pointer arguments must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn heimdal_pkinit_client_mk_padata(
+    ctx: *mut c_void,
+    nonce: i32,
+    ctime: i64,
+    cusec: i32,
+    req_body_data: *const u8,
+    req_body_len: usize,
+    out_data: *mut *mut u8,
+    out_len: *mut usize,
+) -> bindings::krb5_error_code {
+    if ctx.is_null() || out_data.is_null() || out_len.is_null() {
+        return libc::EINVAL as _;
+    }
+    unsafe {
+        *out_data = std::ptr::null_mut();
+        *out_len = 0;
+    }
+
+    let client = unsafe { &mut *(ctx as *mut PkinitClientCtx) };
+    let req_body = if req_body_data.is_null() || req_body_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(req_body_data, req_body_len) }
+    };
+
+    match client.build_as_req(nonce, ctime, cusec, req_body) {
+        Ok(pa_req_der) => {
+            let buf = unsafe { libc::malloc(pa_req_der.len()) as *mut u8 };
+            if buf.is_null() {
+                return libc::ENOMEM as _;
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(pa_req_der.as_ptr(), buf, pa_req_der.len());
+                *out_data = buf;
+                *out_len = pa_req_der.len();
+            }
+            0
+        }
+        Err(_) => libc::EINVAL as _,
+    }
+}
+
+/// Process the KDC's PA-PK-AS-REP and derive the reply key.
+///
+/// On success, `reply_key` is filled with the derived key.
+///
+/// # Safety
+///
+/// All pointer arguments must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn heimdal_pkinit_client_rd_pa_reply(
+    context: bindings::krb5_context,
+    ctx: *mut c_void,
+    pa_data: *const u8,
+    pa_len: usize,
+    nonce: i32,
+    enctype: i32,
+    as_req_data: *const u8,
+    as_req_len: usize,
+    client_name: *const c_char,
+    server_name: *const c_char,
+    reply_key: *mut bindings::krb5_keyblock,
+) -> bindings::krb5_error_code {
+    if ctx.is_null() || pa_data.is_null() || reply_key.is_null() {
+        return libc::EINVAL as _;
+    }
+
+    let client = unsafe { &mut *(ctx as *mut PkinitClientCtx) };
+    let pa_slice = unsafe { std::slice::from_raw_parts(pa_data, pa_len) };
+    let as_req_der = if as_req_data.is_null() || as_req_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(as_req_data, as_req_len) }
+    };
+
+    let client_str = if client_name.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(client_name) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let server_str = if server_name.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(server_name) }
+            .to_str()
+            .unwrap_or("")
+    };
+
+    match client.process_as_rep(
+        context, pa_slice, nonce, enctype, as_req_der, client_str, server_str,
+    ) {
+        Ok(derived) => {
+            let key_bytes = derived.key_data.as_ref();
+            let key_buf = unsafe { libc::malloc(key_bytes.len()) as *mut u8 };
+            if key_buf.is_null() {
+                return libc::ENOMEM as _;
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), key_buf, key_bytes.len());
+                (*reply_key).keytype = derived.enctype as _;
+                (*reply_key).keyvalue.data = key_buf as *mut _;
+                (*reply_key).keyvalue.length = key_bytes.len();
+            }
+            0
+        }
+        Err(_) => libc::EINVAL as _,
+    }
+}
+
+/// Handle a KDC error with retry hints (TD-DH-PARAMETERS etc.).
+///
+/// Returns 0 if a retry is possible (the context has been updated),
+/// or an error code if no retry is possible.
+///
+/// # Safety
+///
+/// `ctx` must be a valid pointer from `heimdal_pkinit_client_init`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn heimdal_pkinit_client_tryagain(
+    ctx: *mut c_void,
+    error_padata: *const u8,
+    error_padata_len: usize,
+) -> bindings::krb5_error_code {
+    if ctx.is_null() || error_padata.is_null() || error_padata_len == 0 {
+        return libc::EINVAL as _;
+    }
+    let client = unsafe { &mut *(ctx as *mut PkinitClientCtx) };
+    let data = unsafe { std::slice::from_raw_parts(error_padata, error_padata_len) };
+
+    match client.handle_tryagain(data) {
+        Ok(action) => {
+            use pkinit_core::client::RetryAction;
+            match action {
+                RetryAction::NoRetry => libc::EINVAL as _,
+                _ => 0, // retry is possible
+            }
+        }
+        Err(_) => libc::EINVAL as _,
+    }
+}
+
+/// Free a client PKINIT context.
+///
+/// # Safety
+///
+/// `ctx` must be a pointer from `heimdal_pkinit_client_init`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn heimdal_pkinit_client_free(
+    ctx: *mut c_void,
+) {
+    if !ctx.is_null() {
+        drop(unsafe { Box::from_raw(ctx as *mut PkinitClientCtx) });
+    }
 }
