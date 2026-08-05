@@ -529,9 +529,18 @@ _kdc_log_timestamp(astgs_request_t r, const char *type,
 #ifdef PKINIT_RUST
 #include "heimdal_pkinit.h"
 
+static krb5_error_code pa_pkinit_validate_c(astgs_request_t, const PA_DATA *);
+
 static krb5_error_code
 pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 {
+    /*
+     * Win2k PKINIT (PA type 15) uses RSA key transport which
+     * pkinit-core does not support.  Route it to the C code path.
+     */
+    if (pa->padata_type == KRB5_PADATA_PK_AS_REQ_WIN)
+	return pa_pkinit_validate_c(r, pa);
+
     void *pkp = NULL;
     char *client_cert = NULL;
     krb5_error_code ret;
@@ -740,9 +749,11 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 }
 
 #else /* !PKINIT_RUST */
+#define pa_pkinit_validate_c pa_pkinit_validate
+#endif /* PKINIT_RUST selection */
 
 static krb5_error_code
-pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
+pa_pkinit_validate_c(astgs_request_t r, const PA_DATA *pa)
 {
     pk_client_params *pkp = NULL;
     char *client_cert = NULL;
@@ -797,8 +808,6 @@ pa_pkinit_validate(astgs_request_t r, const PA_DATA *pa)
 
     return ret;
 }
-
-#endif /* PKINIT_RUST */
 
 #endif /* PKINIT */
 

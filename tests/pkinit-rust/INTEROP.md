@@ -223,16 +223,46 @@ correctly. The Heimdal KDC simply never sends `PA-AS-FRESHNESS`.
 
 ### Win2k PKINIT
 
-The Rust adapter does not support Win2k-era PKINIT (different ASN.1
-types: `PKAuthenticator-Win2k`, `PA-PK-AS-REQ-Win2k`, etc.). When
-`PKINIT_RUST` is enabled:
+Win2k PKINIT is a pre-RFC 4556 Microsoft extension that differs
+fundamentally from IETF PKINIT:
 
-- IETF PKINIT (`PA-PK-AS-REQ`, type 16) → handled by Rust pkinit-core
-- Win2k PKINIT (`PA-PK-AS-REQ-Win`, type 15) → falls through to
-  Heimdal's C code path (if the C code is still compiled)
+| Aspect | IETF PKINIT (RFC 4556) | Win2k PKINIT |
+|--------|----------------------|---------------|
+| PA-DATA type | 16 (`PA-PK-AS-REQ`) | 15 (`PA-PK-AS-REQ-WIN`) |
+| ASN.1 types | `AuthPack`, `PKAuthenticator` | `AuthPack-Win2k`, `PKAuthenticator-Win2k` |
+| Key exchange | DH / ECDH / KEM | RSA key transport only |
+| Reply format | `DHRepInfo` + signed `KDCDHKeyInfo` | CMS `EnvelopedData` with `ReplyKeyPack-Win2k` |
+| Content types | `id-pkinit-authData`, `id-pkinit-DHKeyData` | `id-pkcs7-data` |
+| Replay protection | `paChecksum` over req body | Optional 09-binding padata |
 
-This is acceptable because Win2k PKINIT is deprecated and only used by
-very old Windows clients (pre-Windows XP SP2).
+**Why it can't use pkinit-core**: `pkinit-core` explicitly does not
+support RSA key transport (`PaPkAsRep::EncKeyPack` returns
+`Unsupported`). Win2k PKINIT requires the KDC to:
+1. Generate a random reply key
+2. Wrap it in a `ReplyKeyPack-Win2k` (key + nonce)
+3. Sign it with the KDC's certificate
+4. Encrypt the signed data with the client's RSA public key
+   using CMS `EnvelopedData` (`hx509_cms_envelope_1`)
+
+This envelope encryption uses `hx509` APIs that have no equivalent
+in pkinit-core.
+
+**Current behavior**: When `PKINIT_RUST` is enabled, the
+`pa_pkinit_validate` function only handles IETF PKINIT (type 16).
+Win2k requests (type 15) are routed to the same function but the
+Rust path's `heimdal_pkinit_rd_padata` will fail to parse them
+(different ASN.1 format), and the error falls through.
+
+**To fully support Win2k**: Keep Heimdal's original C
+`_kdc_pk_rd_padata` for type 15 requests and only route type 16
+to the Rust path. This requires checking `pa->padata_type` in
+the C code before deciding which path to take.
+
+**Practical impact**: Win2k PKINIT is only used by Windows 2000
+and early Windows XP clients (pre-SP2). All modern Windows
+versions (XP SP2+, Vista, 7, 8, 10, 11, Server 2003+) use
+IETF PKINIT (type 16). Environments without legacy Windows 2000
+clients are unaffected.
 
 ### Anonymous PKINIT (RFC 6112, RFC 8062) — Fixed
 
