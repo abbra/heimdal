@@ -221,48 +221,25 @@ freshness support via its FAST framework).
 `PA-AS-FRESHNESS`, kurbu5-pkinit (on the client side) handles it
 correctly. The Heimdal KDC simply never sends `PA-AS-FRESHNESS`.
 
-### Win2k PKINIT
+### Win2k PKINIT and RSA key transport — Deprecated
 
-Win2k PKINIT is a pre-RFC 4556 Microsoft extension that differs
-fundamentally from IETF PKINIT:
+Win2k PKINIT (PA type 15) uses RSA key transport, which is being
+formally deprecated by
+[draft-rische-kitten-pkinit-crypto-deprec](https://datatracker.ietf.org/doc/draft-rische-kitten-pkinit-crypto-deprec/).
+The `pkinit-core` library deliberately does not implement RSA key
+transport (`PaPkAsRep::EncKeyPack` returns `Unsupported`).
 
-| Aspect | IETF PKINIT (RFC 4556) | Win2k PKINIT |
-|--------|----------------------|---------------|
-| PA-DATA type | 16 (`PA-PK-AS-REQ`) | 15 (`PA-PK-AS-REQ-WIN`) |
-| ASN.1 types | `AuthPack`, `PKAuthenticator` | `AuthPack-Win2k`, `PKAuthenticator-Win2k` |
-| Key exchange | DH / ECDH / KEM | RSA key transport only |
-| Reply format | `DHRepInfo` + signed `KDCDHKeyInfo` | CMS `EnvelopedData` with `ReplyKeyPack-Win2k` |
-| Content types | `id-pkinit-authData`, `id-pkinit-DHKeyData` | `id-pkcs7-data` |
-| Replay protection | `paChecksum` over req body | Optional 09-binding padata |
-
-**Why it can't use pkinit-core**: `pkinit-core` explicitly does not
-support RSA key transport (`PaPkAsRep::EncKeyPack` returns
-`Unsupported`). Win2k PKINIT requires the KDC to:
-1. Generate a random reply key
-2. Wrap it in a `ReplyKeyPack-Win2k` (key + nonce)
-3. Sign it with the KDC's certificate
-4. Encrypt the signed data with the client's RSA public key
-   using CMS `EnvelopedData` (`hx509_cms_envelope_1`)
-
-This envelope encryption uses `hx509` APIs that have no equivalent
-in pkinit-core.
-
-**Current behavior**: When `PKINIT_RUST` is enabled, the
-`pa_pkinit_validate` function only handles IETF PKINIT (type 16).
-Win2k requests (type 15) are routed to the same function but the
-Rust path's `heimdal_pkinit_rd_padata` will fail to parse them
-(different ASN.1 format), and the error falls through.
-
-**To fully support Win2k**: Keep Heimdal's original C
-`_kdc_pk_rd_padata` for type 15 requests and only route type 16
-to the Rust path. This requires checking `pa->padata_type` in
-the C code before deciding which path to take.
+**Current behavior**: When `PKINIT_RUST` is enabled, the KDC
+automatically routes Win2k requests (PA type 15) to Heimdal's
+original C code path. IETF PKINIT (PA type 16) goes through
+the Rust pkinit-core path. This provides backward compatibility
+without requiring pkinit-core to implement a deprecated mechanism.
 
 **Practical impact**: Win2k PKINIT is only used by Windows 2000
 and early Windows XP clients (pre-SP2). All modern Windows
 versions (XP SP2+, Vista, 7, 8, 10, 11, Server 2003+) use
-IETF PKINIT (type 16). Environments without legacy Windows 2000
-clients are unaffected.
+IETF PKINIT (PA type 16). New deployments should not need
+Win2k support.
 
 ### Anonymous PKINIT (RFC 6112, RFC 8062) — Fixed
 
@@ -300,4 +277,5 @@ Verified with both Heimdal `kinit -n` and MIT `kinit -n` (kurbu5-pkinit).
 - [RFC 8070](https://www.rfc-editor.org/rfc/rfc8070) — Freshness Tokens
 - [RFC 8636](https://www.rfc-editor.org/rfc/rfc8636) — PKINIT Algorithm Agility
 - [draft-bokovoy-kitten-pkinit-pqc](https://datatracker.ietf.org/doc/draft-bokovoy-kitten-pkinit-pqc/) — Post-quantum PKINIT
+- [draft-rische-kitten-pkinit-crypto-deprec](https://datatracker.ietf.org/doc/draft-rische-kitten-pkinit-crypto-deprec/) — PKINIT crypto deprecation (RSA key transport)
 - [FIPS 203](https://csrc.nist.gov/pubs/fips/203/final) — ML-KEM
