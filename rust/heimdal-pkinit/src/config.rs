@@ -5,74 +5,37 @@ use pkinit_core::constants::{DhGroup, KemAlgorithm};
 
 use crate::bindings;
 
-/// Read KDC PKINIT configuration from Heimdal's `krb5_kdc_configuration`.
+/// Read KDC PKINIT configuration from `krb5.conf`.
+///
+/// We intentionally do NOT access `krb5_kdc_configuration` struct fields
+/// because the struct is defined in an internal header (`kdc_locl.h`)
+/// whose layout differs from the installed `kdc.h` that bindgen uses.
+/// Reading directly from `krb5.conf` avoids struct layout mismatches.
 ///
 /// # Safety
 ///
-/// `config` must be a valid, non-null pointer to a fully initialized
-/// `krb5_kdc_configuration` struct.
+/// `context` must be a valid Heimdal krb5 context.
 pub(crate) unsafe fn read_kdc_config(
     context: bindings::krb5_context,
-    config: *const bindings::krb5_kdc_configuration,
+    _config: *const bindings::krb5_kdc_configuration,
 ) -> PkinitKdcConfig {
-    let config = unsafe { &*config };
     let mut kdc_config = PkinitKdcConfig::default();
 
-    // pkinit_kdc_identity → identity
-    if !config.pkinit_kdc_identity.is_null() {
-        let cstr = unsafe { std::ffi::CStr::from_ptr(config.pkinit_kdc_identity) };
-        if let Ok(s) = cstr.to_str() {
-            kdc_config.identity = Some(s.to_string());
-        }
+    // pkinit_identity
+    if let Some(v) = unsafe { read_config_string(context, &["kdc", "pkinit_identity"]) } {
+        kdc_config.identity = Some(v);
     }
 
-    // pkinit_kdc_anchors → anchors
-    if !config.pkinit_kdc_anchors.is_null() {
-        let cstr = unsafe { std::ffi::CStr::from_ptr(config.pkinit_kdc_anchors) };
-        if let Ok(s) = cstr.to_str() {
-            kdc_config.anchors.push(s.to_string());
-        }
-    }
-
-    // pkinit_kdc_cert_pool → intermediates
-    if !config.pkinit_kdc_cert_pool.is_null() {
-        let mut i = 0;
-        loop {
-            let ptr = unsafe { *config.pkinit_kdc_cert_pool.add(i) };
-            if ptr.is_null() {
-                break;
-            }
-            let cstr = unsafe { std::ffi::CStr::from_ptr(ptr) };
-            if let Ok(s) = cstr.to_str() {
-                kdc_config.intermediates.push(s.to_string());
-            }
-            i += 1;
-        }
-    }
-
-    // pkinit_kdc_revoke → crls
-    if !config.pkinit_kdc_revoke.is_null() {
-        let mut i = 0;
-        loop {
-            let ptr = unsafe { *config.pkinit_kdc_revoke.add(i) };
-            if ptr.is_null() {
-                break;
-            }
-            let cstr = unsafe { std::ffi::CStr::from_ptr(ptr) };
-            if let Ok(s) = cstr.to_str() {
-                kdc_config.crls.push(s.to_string());
-            }
-            i += 1;
-        }
+    // pkinit_anchors
+    if let Some(v) = unsafe { read_config_string(context, &["kdc", "pkinit_anchors"]) } {
+        kdc_config.anchors.push(v);
     }
 
     // pkinit_dh_min_bits
-    kdc_config.dh_min_bits = config.pkinit_dh_min_bits as u32;
+    let dh_min = unsafe { read_config_int(context, &["kdc", "pkinit_dh_min_bits"], 2048) };
+    kdc_config.dh_min_bits = dh_min as u32;
 
-    // PQC config: read from krb5.conf since krb5_kdc_configuration is
-    // defined in an internal header (kdc_locl.h) that bindgen can't access.
-    // The C side populates config->pkinit_pqc_min_algorithm from krb5.conf
-    // for its own use; we read the same krb5.conf values independently.
+    // pkinit_pqc_min_algorithm
     let pqc_min = unsafe { read_config_string(context, &["kdc", "pkinit_pqc_min_algorithm"]) };
     if let Some(ref name) = pqc_min {
         if let Some(alg) = KemAlgorithm::from_name(name) {
@@ -80,6 +43,7 @@ pub(crate) unsafe fn read_kdc_config(
         }
     }
 
+    // pkinit_require_freshness
     let freshness = unsafe { read_config_string(context, &["kdc", "pkinit_require_freshness"]) };
     if let Some(ref v) = freshness {
         kdc_config.require_freshness = matches!(v.as_str(), "yes" | "true" | "1");

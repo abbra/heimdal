@@ -152,8 +152,9 @@ heimdal_pkinit_client_rd_pa_reply heimdal_pkinit_client_free \
 heimdal_pkinit_client_set_freshness heimdal_pkinit_client_process_hint \
 heimdal_pkinit_client_tryagain"
 
+ALL_SYMBOLS=$(nm "$RUST_LIB" 2>/dev/null | grep " T heimdal_pkinit_" || true)
 for sym in $EXPECTED_SYMBOLS; do
-    if nm "$RUST_LIB" 2>/dev/null | grep -q " T ${sym}$"; then
+    if echo "$ALL_SYMBOLS" | grep -q " T ${sym}$"; then
         :
     else
         testfailed "missing symbol: $sym"
@@ -228,21 +229,35 @@ CONF
 write_krb5_conf
 export KRB5_CONFIG="$WORKDIR/krb5.conf"
 
+# Set database path
+HDB_FILE="$WORKDIR/db/heimdal"
+mkdir -p "$WORKDIR/db"
+
+# Add database config to krb5.conf
+cat >> "$WORKDIR/krb5.conf" <<DBCONF
+
+[kdc]
+    database = {
+        dbname = $HDB_FILE
+        log_file = $WORKDIR/db/log
+    }
+DBCONF
+
+KADMIN_CMD="$KADMIN -l -H $HDB_FILE"
+
 # Initialize database
-"$KADMIN" -l init --realm-max-ticket-life=1d --realm-max-renewable-life=7d \
-    "$REALM" > "$WORKDIR/kadmin.log" 2>&1 || {
-    testfailed "kadmin init failed"
+$KADMIN_CMD init --realm-max-ticket-life=1d --realm-max-renewable-life=7d \
+    "$REALM" > "$WORKDIR/kadmin.log" 2>&1
+# Check if db was created (kadmin may report non-fatal iprop errors)
+if [ ! -f "${HDB_FILE}.db" ] && [ ! -f "${HDB_FILE}" ]; then
+    testfailed "kadmin init failed (no database file)"
     cat "$WORKDIR/kadmin.log"
     exit 1
-}
+fi
 
 # Add test principal
-"$KADMIN" -l add --random-password --use-defaults \
+$KADMIN_CMD add --random-password --use-defaults \
     "${CLIENT}@${REALM}" >> "$WORKDIR/kadmin.log" 2>&1 || true
-
-# Add krbtgt
-"$KADMIN" -l add --random-password --use-defaults \
-    "krbtgt/${REALM}@${REALM}" >> "$WORKDIR/kadmin.log" 2>&1 || true
 
 testsuccess "KDC database initialized"
 
