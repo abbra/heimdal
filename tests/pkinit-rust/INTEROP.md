@@ -5,16 +5,58 @@
 This document describes how to test the Rust PKINIT adapter against both
 Heimdal's own client and MIT Kerberos with the `kurbu5-pkinit` plugin.
 
-## Test Matrix
+## Verified Test Matrix
 
-| KDC | Client | Key Exchange | Expected |
-|-----|--------|-------------|----------|
-| Heimdal+Rust | Heimdal `kinit` | ECDH P-256 | ✅ |
-| Heimdal+Rust | Heimdal `kinit` | DH-2048 | ✅ |
-| Heimdal+Rust | MIT `kinit` + `kurbu5-pkinit` | ECDH P-256 | ✅ |
-| Heimdal+Rust | MIT `kinit` + `kurbu5-pkinit` | ML-KEM-768 | ✅ |
-| MIT KDC + `kurbu5-pkinit` | Heimdal `kinit` (C) | ECDH P-256 | ✅ |
-| Heimdal+Rust | MIT `kinit` + `kurbu5-pkinit` | ML-KEM-768-X25519 | ✅ |
+All combinations below have been verified by `check-interop.sh`:
+
+| # | KDC | Client | Key Exchange | Status |
+|---|-----|--------|-------------|--------|
+| 1a | Heimdal+Rust | Heimdal `kinit` (Rust client) | DH-2048 | ✅ Verified |
+| 1b | Heimdal+Rust | Heimdal `kinit` (Rust client) | ECDH P-256 | ✅ Verified |
+| 1c | Heimdal+Rust | Heimdal `kinit` (Rust client) | ECDH P-384 | ✅ Verified |
+| 1d | Heimdal+Rust | Heimdal `kinit` (Rust client) | ECDH P-521 | ✅ Verified |
+| 1e | Heimdal+Rust | Heimdal `kinit` (Rust client) | KDF ah-sha256 | ✅ Verified |
+| 1f | Heimdal+Rust | Heimdal `kinit` (Rust client) | KDF ah-sha512 | ✅ Verified |
+| 2 | Heimdal+Rust | MIT `kinit` + `kurbu5-pkinit` | ECDH P-256 | ✅ Verified |
+| 3 | MIT KDC + `kurbu5-pkinit` | Heimdal `kinit` | ECDH P-256 | ✅ Verified |
+| 4 | MIT KDC + `kurbu5-pkinit` | MIT `kinit` + `kurbu5-pkinit` | ECDH P-256 | ✅ Verified |
+| 5 | Heimdal+Rust (PQC) | MIT `kinit` + `kurbu5-pkinit` | **ML-KEM-768** | ✅ Verified |
+| 6a | Heimdal+Rust (PQC enforce) | MIT `kinit` + `kurbu5-pkinit` | DH rejected | ✅ Verified |
+| 6b | Heimdal+Rust (PQC enforce) | MIT `kinit` + `kurbu5-pkinit` | **ML-KEM-768 auto-retry** | ✅ Verified |
+
+### ML-KEM-768 KDC Log (Test 5)
+
+```
+PKINIT: KDC initialized (Rust pkinit-core), KEM hint 32 bytes
+PKINIT: get_hint returning 32 bytes of KEM algorithm hint
+PKINIT: verified AS-REQ via ML-KEM-768
+PKINIT pre-authentication succeeded -- testuser using ML-KEM-768
+PKINIT: built AS-REP via ML-KEM-768
+AS-REQ SUCCESS
+```
+
+## Running the Tests
+
+### Automated (recommended)
+
+```sh
+# Full interop test suite
+HEIMDAL_PREFIX=/opt/heimdal-test \
+KURBU5_DIR=~/workspace/kurbu5-pkinit \
+    tests/pkinit-rust/check-interop.sh
+
+# With verbose output
+VERBOSE=1 HEIMDAL_PREFIX=/opt/heimdal-test \
+KURBU5_DIR=~/workspace/kurbu5-pkinit \
+    tests/pkinit-rust/check-interop.sh
+```
+
+### Full build + test pipeline
+
+```sh
+tests/pkinit-rust/build-and-test.sh \
+    --prefix /opt/heimdal-test
+```
 
 ## Prerequisites
 
@@ -30,125 +72,206 @@ autoreconf -fi
 make && make install
 ```
 
-### MIT Kerberos with kurbu5-pkinit
+### MIT Kerberos + kurbu5-pkinit
+
+The system MIT krb5 (`krb5-workstation`, `krb5-server` packages) works.
+Only `kurbu5-pkinit` needs to be built from source:
 
 ```sh
-# Build MIT krb5
-cd ~/workspace/mit-krb5/src
-./configure --prefix=/opt/mit-test
-make && make install
-
-# Build kurbu5-pkinit
 cd ~/workspace/kurbu5-pkinit
 cargo build --release
-install -m 755 target/release/libkurbu5_pkinit.so \
-    /opt/mit-test/lib/krb5/plugins/preauth/pkinit.so
+# The plugin is: target/release/libkurbu5_pkinit.so
 ```
 
-## Test Setup
+The test scripts load `kurbu5-pkinit` via MIT's `[plugins]` config
+sections and `plugin_base_dir` redirection, so no system files need
+to be modified.
 
-### Shared PKI
+## MIT Plugin Loading
 
-Both implementations must use the same CA, KDC certificate, and client
-certificate. Use `setup-pki.sh` to generate them:
+MIT krb5 uses separate plugin interfaces for KDC and client:
 
-```sh
-./tests/pkinit-rust/setup-pki.sh /tmp/pkinit-pki
+```ini
+[libdefaults]
+    # Redirect plugin search away from /usr/lib64/krb5/plugins/
+    # to avoid loading the system pkinit.so alongside ours
+    plugin_base_dir = /path/to/test/plugins
+
+[plugins]
+    clpreauth = {
+        module = pkinit:/path/to/libkurbu5_pkinit.so
+    }
+    kdcpreauth = {
+        module = pkinit:/path/to/libkurbu5_pkinit.so
+    }
+    certauth = {
+        module = pkinit:/path/to/libkurbu5_pkinit.so
+    }
 ```
 
-### Heimdal KDC Configuration (krb5.conf)
+**Important**: the old `[plugins] preauth = { ... }` syntax does NOT
+work for loading `kurbu5-pkinit`. MIT krb5 requires the interface-
+specific section names (`clpreauth`, `kdcpreauth`, `certauth`).
+
+Non-PKINIT system plugins (spake.so, otp.so) must be symlinked into
+the `plugin_base_dir/preauth/` directory to avoid "unable to load
+plugin" errors.
+
+## KDC Configuration
+
+### Heimdal KDC (krb5.conf)
 
 ```ini
 [kdc]
     enable-pkinit = true
-    pkinit_identity = FILE:/tmp/pkinit-pki/kdc.pem,/tmp/pkinit-pki/kdc.key
-    pkinit_anchors = FILE:/tmp/pkinit-pki/ca.pem
+    pkinit_identity = FILE:/path/to/kdc.pem,/path/to/kdc.key
+    pkinit_anchors = FILE:/path/to/ca.pem
     pkinit_principal_in_certificate = true
-    # Enable PQC:
+
+    # Post-quantum: advertise ML-KEM-768 and ML-KEM-1024
     pkinit_pqc_min_algorithm = ML-KEM-768
+
+    # Optional: reject classical DH/ECDH entirely
+    pkinit_require_pqc = true
 ```
 
-### MIT KDC Configuration (kdc.conf)
+### MIT KDC (kdc.conf, using kurbu5-pkinit)
 
 ```ini
-[kdcdefaults]
-    pkinit_identity = FILE:/tmp/pkinit-pki/kdc.pem,/tmp/pkinit-pki/kdc.key
-    pkinit_anchors = FILE:/tmp/pkinit-pki/ca.pem
-    pkinit_pqc_min_algorithm = ML-KEM-768
+[realms]
+    EXAMPLE.COM = {
+        pkinit_identity = FILE:/path/to/kdc.pem,/path/to/kdc.key
+        pkinit_anchors = FILE:/path/to/ca.pem
+        pkinit_pqc_min_algorithm = ML-KEM-768
+    }
 ```
 
-## Running Cross-Tests
+## PQC Behavior
 
-### Test 1: Heimdal KDC (Rust) ↔ Heimdal kinit
+### Hint advertisement
 
-```sh
-export KRB5_CONFIG=/path/to/heimdal/krb5.conf
-/opt/heimdal-test/bin/kinit \
-    -C FILE:/tmp/pkinit-pki/client.pem,/tmp/pkinit-pki/client.key \
-    --x509-anchors=FILE:/tmp/pkinit-pki/ca.pem \
-    testuser@EXAMPLE.COM
-```
+When `pkinit_pqc_min_algorithm` is configured, the Heimdal KDC includes
+a `PA-PK-AS-REQ-Hint` in the `ERR_PREAUTH_REQUIRED` response listing
+the supported ML-KEM algorithms. A PQC-capable client (kurbu5-pkinit)
+parses this hint and selects ML-KEM for its AS-REQ.
 
-### Test 2: Heimdal KDC (Rust) ↔ MIT kinit (kurbu5-pkinit, classical)
+### Enforcement
 
-```sh
-export KRB5_CONFIG=/path/to/mit/krb5.conf
-/opt/mit-test/bin/kinit \
-    -X X509_user_identity=FILE:/tmp/pkinit-pki/client.pem,/tmp/pkinit-pki/client.key \
-    -X X509_anchors=FILE:/tmp/pkinit-pki/ca.pem \
-    testuser@EXAMPLE.COM
-```
+When `pkinit_require_pqc = true`, the KDC:
+1. Accepts the AS-REQ and verifies the CMS signature
+2. Detects the key exchange is classical DH/ECDH
+3. Returns `KDC_ERR_DH_KEY_PARAMETERS_NOT_ACCEPTED` (error 65)
+4. Includes the acceptable KEM algorithms in the error data
+5. A PQC-capable client retries with ML-KEM and succeeds
 
-### Test 3: Heimdal KDC (Rust) ↔ MIT kinit (kurbu5-pkinit, ML-KEM-768)
+### Auto-negotiation (verified)
 
-```sh
-# krb5.conf must have: pkinit_pqc_min_algorithm = ML-KEM-768
-export KRB5_CONFIG=/path/to/mit/krb5.conf
-/opt/mit-test/bin/kinit \
-    -X X509_user_identity=FILE:/tmp/pkinit-pki/client.pem,/tmp/pkinit-pki/client.key \
-    -X X509_anchors=FILE:/tmp/pkinit-pki/ca.pem \
-    testuser@EXAMPLE.COM
-# The KDC log should show: "PKINIT: verified AS-REQ via ML-KEM-768"
-```
+When `pkinit_require_pqc = true` and the client is kurbu5-pkinit:
+1. Client sends AS-REQ with ECDH P-256
+2. KDC rejects with error 65 + KEM algorithm list
+3. Client's `handle_tryagain()` selects ML-KEM-768
+4. Client sends new AS-REQ with ML-KEM-768 public key
+5. KDC encapsulates, derives key via HKDF-SHA-512
+6. Ticket issued successfully
 
-### Test 4: MIT KDC (kurbu5-pkinit) ↔ Heimdal kinit
+## Supported Algorithms
 
-```sh
-# Start MIT KDC with kurbu5-pkinit plugin
-export KRB5_CONFIG=/path/to/heimdal/krb5.conf
-/opt/heimdal-test/bin/kinit \
-    -C FILE:/tmp/pkinit-pki/client.pem,/tmp/pkinit-pki/client.key \
-    --x509-anchors=FILE:/tmp/pkinit-pki/ca.pem \
-    testuser@EXAMPLE.COM
-```
+### Key exchange (via pkinit-core)
 
-## Verifying PQC Key Exchange
+| Algorithm | Type | Status |
+|-----------|------|--------|
+| MODP DH 2048 | Classical | ✅ |
+| MODP DH 4096 | Classical | ✅ |
+| ECDH P-256 | Classical | ✅ |
+| ECDH P-384 | Classical | ✅ |
+| ECDH P-521 | Classical | ✅ |
+| ML-KEM-512 | Post-quantum | ✅ (supported, untested) |
+| ML-KEM-768 | Post-quantum | ✅ Verified |
+| ML-KEM-1024 | Post-quantum | ✅ (supported, untested) |
+| ML-KEM-768-X25519 | Composite | ✅ (supported, untested) |
+| ML-KEM-768-ECDH-P256 | Composite | ✅ (supported, untested) |
+| ML-KEM-1024-ECDH-P384 | Composite | ✅ (supported, untested) |
 
-When `pkinit_pqc_min_algorithm` is set, check the KDC log for evidence
-of ML-KEM negotiation:
+### KDF algorithms (RFC 8636)
 
-```
-# Heimdal KDC (Rust):
-PKINIT: verified AS-REQ via ML-KEM-768
-PKINIT: built AS-REP via ML-KEM-768
-
-# MIT KDC (kurbu5-pkinit):
-PKINIT client selected ML-KEM-768
-PKINIT client verified AS-REP via ML-KEM-768
-```
+| Algorithm | Status |
+|-----------|--------|
+| SP800-56A SHA-256 (`ah-sha256`) | ✅ Verified |
+| SP800-56A SHA-512 (`ah-sha512`) | ✅ Verified |
+| SP800-56A SHA-1 (`ah-sha1`) | ✅ (supported) |
+| HKDF-SHA-512 (KEM path) | ✅ Verified (with ML-KEM) |
+| Legacy `octetstring2key` | ✅ Verified (default DH) |
 
 ## Known Limitations
 
-- **Freshness tokens (RFC 8070)**: `pkinit-core` supports them at the
-  protocol level, but Heimdal's KDC doesn't have the infrastructure to
-  generate/validate freshness tokens. The feature works with MIT's KDC
-  (which has freshness support in its FAST framework).
+### Freshness tokens (RFC 8070)
 
-- **Win2k PKINIT**: The Rust adapter does not support Win2k-era PKINIT.
-  When `PKINIT_RUST` is enabled, Win2k PKINIT requests will fall through
-  to the original C code path (since `pa_pkinit_validate` handles both
-  in the C path, and the Rust path only handles IETF PKINIT).
+`pkinit-core` supports freshness tokens at the protocol level:
+- `PkinitClientState::set_freshness_token()` stores a received token
+- `PKAuthenticator.freshness_token` is included in the AS-REQ
+- The Heimdal adapter exposes `heimdal_pkinit_client_set_freshness()`
 
-- **Anonymous PKINIT**: Supported by `pkinit-core` but the Heimdal
-  adapter doesn't yet wire PA-PKINIT-KX (RFC 6112) for the anonymous
-  session key derivation. Classical anonymous PKINIT works.
+However, Heimdal's KDC does not have the infrastructure to **generate**
+freshness tokens (which requires an encrypted timestamp mechanism in the
+KDC's pre-auth framework). This is a Heimdal limitation, not a
+pkinit-core limitation. The feature works with MIT's KDC (which has
+freshness support via its FAST framework).
+
+**Workaround**: When interoperating with an MIT KDC that sends
+`PA-AS-FRESHNESS`, kurbu5-pkinit (on the client side) handles it
+correctly. The Heimdal KDC simply never sends `PA-AS-FRESHNESS`.
+
+### Win2k PKINIT
+
+The Rust adapter does not support Win2k-era PKINIT (different ASN.1
+types: `PKAuthenticator-Win2k`, `PA-PK-AS-REQ-Win2k`, etc.). When
+`PKINIT_RUST` is enabled:
+
+- IETF PKINIT (`PA-PK-AS-REQ`, type 16) → handled by Rust pkinit-core
+- Win2k PKINIT (`PA-PK-AS-REQ-Win`, type 15) → falls through to
+  Heimdal's C code path (if the C code is still compiled)
+
+This is acceptable because Win2k PKINIT is deprecated and only used by
+very old Windows clients (pre-Windows XP SP2).
+
+### Anonymous PKINIT (RFC 6112, RFC 8062)
+
+`pkinit-core` fully supports anonymous PKINIT:
+- Unsigned CMS data (no client certificate)
+- `WELLKNOWN/ANONYMOUS` principal detection
+- PA-PKINIT-KX session key derivation via `krb5_crypto_fx_cf2`
+
+The Heimdal KDC adapter handles anonymous AS-REQ verification and reply
+building through the same Rust code path. However, the **PA-PKINIT-KX**
+padata (RFC 6112 Section 4) that encrypts the KDC's contribution to the
+session key is generated by Heimdal's C code in `_kdc_pk_mk_pa_reply`,
+which is bypassed in the `PKINIT_RUST` path.
+
+**Impact**: Anonymous PKINIT authentication succeeds (the user gets a
+TGT), but the session key is derived solely from the DH/KEM shared
+secret without the KDC's additional contribution. This weakens the
+session key binding but does not affect the reply key derivation.
+
+**Fix**: Wire `PA-PKINIT-KX` generation in the Rust KDC path by calling
+`krb5_crypto_fx_cf2` after `heimdal_pkinit_mk_pa_reply` returns. This
+requires passing the session key through the FFI and performing the
+FX-CF2 operation on the C side.
+
+## Test Scripts
+
+| Script | Purpose | Tests |
+|--------|---------|-------|
+| `check-interop.sh` | Cross-implementation interop | 8 scenarios (Heimdal↔MIT, PQC) |
+| `check-pkinit-rust.sh` | Heimdal-only comprehensive | 16 tests (DH, ECDH, KDF, PQC) |
+| `build-and-test.sh` | Full build + test pipeline | Build + all tests |
+| `setup-pki.sh` | PKI generator | CA + KDC cert + client cert |
+
+## References
+
+- [RFC 4556](https://www.rfc-editor.org/rfc/rfc4556) — PKINIT
+- [RFC 6112](https://www.rfc-editor.org/rfc/rfc6112) — Anonymous PKINIT
+- [RFC 8062](https://www.rfc-editor.org/rfc/rfc8062) — Anonymous Kerberos
+- [RFC 8070](https://www.rfc-editor.org/rfc/rfc8070) — Freshness Tokens
+- [RFC 8636](https://www.rfc-editor.org/rfc/rfc8636) — PKINIT Algorithm Agility
+- [draft-bokovoy-kitten-pkinit-pqc](https://datatracker.ietf.org/doc/draft-bokovoy-kitten-pkinit-pqc/) — Post-quantum PKINIT
+- [FIPS 203](https://csrc.nist.gov/pubs/fips/203/final) — ML-KEM

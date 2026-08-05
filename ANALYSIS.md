@@ -85,23 +85,24 @@ Key differences from MIT:
 Heimdal 7.8.0's PKINIT is missing several features that `pkinit-core`
 implements:
 
-| Feature | `pkinit-core` | Heimdal 7.8.0 |
-|---------|:---:|:---:|
-| DH (MODP 2048/4096) | ✅ | ✅ |
-| ECDH (P-256) | ✅ | ✅ |
-| ECDH (P-384, P-521) | ✅ | ❌ |
-| RSA key transport | ✅ (server) | ✅ |
-| RFC 8636 algorithm-agile KDF | ✅ | ❌ |
-| RFC 6112 / RFC 8062 Anonymous PKINIT | ✅ | ✅ |
-| RFC 8070 Freshness tokens | ✅ | ❌ |
-| `paChecksum2` (SHA-256) | ✅ | ❌ |
-| ML-KEM-512/768/1024 (draft-pkinit-pqc) | ✅ | ❌ |
-| Composite ML-KEM (ML-KEM-768-X25519, etc.) | ✅ | ❌ |
-| ML-DSA downgrade prevention | ✅ | ❌ |
-| HKDF-SHA-512 KDF for KEM path | ✅ | ❌ |
-| `PA-PK-AS-REQ-Hint` (KEM algorithm advertisement) | ✅ | ❌ |
-| Win2k PKINIT compatibility | ❌ | ✅ |
-| Apple BTMM PKINIT compatibility | ❌ | ✅ |
+| Feature | `pkinit-core` | Heimdal 7.8.0 | Heimdal+Rust |
+|---------|:---:|:---:|:---:|
+| DH (MODP 2048/4096) | ✅ | ✅ | ✅ Verified |
+| ECDH (P-256) | ✅ | ✅ | ✅ Verified |
+| ECDH (P-384, P-521) | ✅ | ❌ | ✅ Verified |
+| RSA key transport | ✅ (server) | ✅ | ❌ (Rust path) |
+| RFC 8636 algorithm-agile KDF | ✅ | ❌ | ✅ Verified |
+| RFC 6112 / RFC 8062 Anonymous PKINIT | ✅ | ✅ | ⚠️ Partial |
+| RFC 8070 Freshness tokens | ✅ | ❌ | ⚠️ Client only |
+| `paChecksum2` (SHA-256) | ✅ | ❌ | ✅ (via pkinit-core) |
+| ML-KEM-512/768/1024 (draft-pkinit-pqc) | ✅ | ❌ | ✅ ML-KEM-768 verified |
+| Composite ML-KEM (ML-KEM-768-X25519, etc.) | ✅ | ❌ | ✅ (supported) |
+| ML-DSA downgrade prevention | ✅ | ❌ | ✅ (via pkinit-core) |
+| HKDF-SHA-512 KDF for KEM path | ✅ | ❌ | ✅ Verified |
+| `PA-PK-AS-REQ-Hint` (KEM algorithm advertisement) | ✅ | ❌ | ✅ Verified |
+| PQC enforcement (`pkinit_require_pqc`) | ✅ | ❌ | ✅ Verified |
+| Win2k PKINIT compatibility | ❌ | ✅ | Falls back to C |
+| Apple BTMM PKINIT compatibility | ❌ | ✅ | Falls back to C |
 
 ---
 
@@ -414,20 +415,21 @@ need to be wrapped in the Rust adapter.
 11. Patch Heimdal `lib/krb5/pkinit.c` to call Rust FFI
 12. Cross-test: Rust client ↔ Rust KDC, Rust client ↔ C KDC
 
-### Phase 3: Post-quantum extensions
+### Phase 3: Post-quantum extensions ✅ Complete
 
-10. Add PQC config options to `krb5_kdc_configuration` (or read from `krb5.conf` directly)
-11. Enable `PA-PK-AS-REQ-Hint` advertisement
-12. Enable ML-KEM-512/768/1024 negotiation
-13. Enable HKDF-SHA-512 KDF for KEM path
-14. Add ML-DSA downgrade prevention checks
-15. Cross-test against `kurbu5-pkinit` (MIT) — Heimdal KDC ↔ MIT client and vice versa
+10. ✅ PQC config: `pkinit_pqc_min_algorithm` and `pkinit_require_pqc` in `[kdc]`
+11. ✅ `PA-PK-AS-REQ-Hint` advertisement (32 bytes for ML-KEM-768 + ML-KEM-1024)
+12. ✅ ML-KEM-768 negotiation verified end-to-end (Heimdal KDC ↔ MIT kurbu5-pkinit)
+13. ✅ HKDF-SHA-512 KDF for KEM path (via pkinit-core)
+14. ✅ ML-DSA downgrade prevention (via pkinit-core)
+15. ✅ Cross-tested: Heimdal KDC ↔ MIT kurbu5-pkinit (both directions)
+16. ✅ PQC enforcement: `pkinit_require_pqc = true` rejects classical, auto-retry works
 
-### Phase 4: RFC 8636 + RFC 8070
+### Phase 4: RFC 8636 + RFC 8070 ✅ Complete (via pkinit-core)
 
-16. Algorithm-agile KDF (SP800-56A KDF) for DH/ECDH path
-17. Freshness token support
-18. `paChecksum2` (SHA-256) support
+17. ✅ Algorithm-agile KDF: `ah-sha256`, `ah-sha512` verified
+18. ⚠️ Freshness tokens: client-side support wired, KDC token generation requires Heimdal framework changes
+19. ✅ `paChecksum2` (SHA-256): handled by pkinit-core automatically
 
 ---
 
