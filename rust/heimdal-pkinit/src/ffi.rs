@@ -25,6 +25,30 @@ fn catch_ffi_panic<T>(f: impl FnOnce() -> T + std::panic::UnwindSafe, on_panic: 
     std::panic::catch_unwind(f).unwrap_or(on_panic)
 }
 
+/// Copy `data` into a freshly `libc::malloc`'d buffer suitable for
+/// returning across the FFI boundary (the C caller frees it with
+/// `free()`). Returns `None` on allocation failure. Centralizing this
+/// pattern (it previously appeared six times, hand-written, with one copy
+/// missing the out-param reset on the failure path) means this class of
+/// bug can now only be introduced once.
+fn to_c_buffer(data: &[u8]) -> Option<(*mut u8, usize)> {
+    let len = data.len();
+    // malloc(0) is implementation-defined (may return NULL or a unique
+    // non-dereferenceable pointer); request at least 1 byte so a NULL
+    // return always means "allocation failed", never "zero-length buffer".
+    let buf = unsafe { libc::malloc(len.max(1)) as *mut u8 };
+    if buf.is_null() {
+        return None;
+    }
+    if len > 0 {
+        // SAFETY: buf was just allocated with at least `len` bytes and is
+        // non-null; data.as_ptr() is valid for `len` bytes per the slice
+        // contract.
+        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), buf, len) };
+    }
+    Some((buf, len))
+}
+
 /// Register the trace/logging callback.  Called from the KDC's
 /// `pkinit-rust.c` during initialization.
 ///
@@ -160,6 +184,10 @@ pub unsafe extern "C" fn heimdal_pkinit_mk_pa_reply(
     if params.is_null() || out_pa_data.is_null() || out_pa_len.is_null() || reply_key.is_null() {
         return libc::EINVAL as _;
     }
+    unsafe {
+        *out_pa_data = std::ptr::null_mut();
+        *out_pa_len = 0;
+    }
 
     let context_addr = context as usize;
     let config_addr = config as usize;
@@ -211,29 +239,25 @@ pub unsafe extern "C" fn heimdal_pkinit_mk_pa_reply(
                 )
             } {
                 Ok((pa_rep_der, derived)) => {
-                    // Allocate the PA-DATA buffer via libc::malloc so Heimdal can free it
-                    let buf = unsafe { libc::malloc(pa_rep_der.len()) as *mut u8 };
-                    if buf.is_null() {
+                    let Some((buf, buf_len)) = to_c_buffer(&pa_rep_der) else {
                         return libc::ENOMEM as _;
-                    }
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(pa_rep_der.as_ptr(), buf, pa_rep_der.len());
-                        *out_pa_data = buf;
-                        *out_pa_len = pa_rep_der.len();
-                    }
+                    };
 
-                    // Fill in the reply key
                     let key_bytes = derived.key_data.as_ref();
-                    let key_buf = unsafe { libc::malloc(key_bytes.len()) as *mut u8 };
-                    if key_buf.is_null() {
+                    let Some((key_buf, key_len)) = to_c_buffer(key_bytes) else {
                         unsafe { libc::free(buf as *mut _) };
+                        // out_pa_data/out_pa_len were already zeroed at
+                        // function entry and are never written before both
+                        // allocations succeed, so no reset is needed here.
                         return libc::ENOMEM as _;
-                    }
+                    };
+
                     unsafe {
-                        std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), key_buf, key_bytes.len());
+                        *out_pa_data = buf;
+                        *out_pa_len = buf_len;
                         (*reply_key).keytype = derived.enctype as _;
                         (*reply_key).keyvalue.data = key_buf as *mut _;
-                        (*reply_key).keyvalue.length = key_bytes.len();
+                        (*reply_key).keyvalue.length = key_len;
                     }
 
                     0
@@ -293,29 +317,18 @@ pub unsafe extern "C" fn heimdal_pkinit_check_client(
                 Ok(s) => s,
                 Err(_) => return libc::EINVAL as _,
             };
-            let len = c_subject.as_bytes_with_nul().len();
-            let buf = unsafe { libc::malloc(len) as *mut c_char };
-            if buf.is_null() {
+            let Some((buf, _len)) = to_c_buffer(c_subject.as_bytes_with_nul()) else {
                 return libc::ENOMEM as _;
-            }
-            unsafe {
-                std::ptr::copy_nonoverlapping(c_subject.as_ptr(), buf, len);
-                *out_subject = buf;
-            }
+            };
+            unsafe { *out_subject = buf as *mut c_char };
             0
         }
         Err(kdc::CheckClientError::Code(code, reason)) => {
-            if let Some(reason) = reason {
-                if let Ok(c_reason) = std::ffi::CString::new(reason) {
-                    let len = c_reason.as_bytes_with_nul().len();
-                    let buf = unsafe { libc::malloc(len) as *mut c_char };
-                    if !buf.is_null() {
-                        unsafe {
-                            std::ptr::copy_nonoverlapping(c_reason.as_ptr(), buf, len);
-                            *out_reject_reason = buf;
-                        }
-                    }
-                }
+            if let Some(reason) = reason
+                && let Ok(c_reason) = std::ffi::CString::new(reason)
+                && let Some((buf, _len)) = to_c_buffer(c_reason.as_bytes_with_nul())
+            {
+                unsafe { *out_reject_reason = buf as *mut c_char };
             }
             code
         }
@@ -434,14 +447,12 @@ pub unsafe extern "C" fn heimdal_pkinit_get_hint(
                 return;
             }
 
-            let buf = unsafe { libc::malloc(hint_der.len()) as *mut u8 };
-            if buf.is_null() {
+            let Some((buf, len)) = to_c_buffer(&hint_der) else {
                 return;
-            }
+            };
             unsafe {
-                std::ptr::copy_nonoverlapping(hint_der.as_ptr(), buf, hint_der.len());
                 *out_data = buf;
-                *out_len = hint_der.len();
+                *out_len = len;
             }
             crate::trace::pkinit_trace!(
                 context, config,
@@ -622,14 +633,12 @@ pub unsafe extern "C" fn heimdal_pkinit_client_mk_padata(
 
     match client.build_as_req(nonce, ctime, cusec, req_body) {
         Ok(pa_req_der) => {
-            let buf = unsafe { libc::malloc(pa_req_der.len()) as *mut u8 };
-            if buf.is_null() {
+            let Some((buf, len)) = to_c_buffer(&pa_req_der) else {
                 return libc::ENOMEM as _;
-            }
+            };
             unsafe {
-                std::ptr::copy_nonoverlapping(pa_req_der.as_ptr(), buf, pa_req_der.len());
                 *out_data = buf;
-                *out_len = pa_req_der.len();
+                *out_len = len;
             }
             0
         }
@@ -690,15 +699,13 @@ pub unsafe extern "C" fn heimdal_pkinit_client_rd_pa_reply(
     ) {
         Ok(derived) => {
             let key_bytes = derived.key_data.as_ref();
-            let key_buf = unsafe { libc::malloc(key_bytes.len()) as *mut u8 };
-            if key_buf.is_null() {
+            let Some((key_buf, key_len)) = to_c_buffer(key_bytes) else {
                 return libc::ENOMEM as _;
-            }
+            };
             unsafe {
-                std::ptr::copy_nonoverlapping(key_bytes.as_ptr(), key_buf, key_bytes.len());
                 (*reply_key).keytype = derived.enctype as _;
                 (*reply_key).keyvalue.data = key_buf as *mut _;
-                (*reply_key).keyvalue.length = key_bytes.len();
+                (*reply_key).keyvalue.length = key_len;
             }
             0
         }

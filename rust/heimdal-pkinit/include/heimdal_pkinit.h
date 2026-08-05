@@ -11,6 +11,12 @@
  * This header declares the functions exported by libheimdal_pkinit.a.
  * Heimdal's KDC and client code call these instead of the original C
  * PKINIT implementation when built with PKINIT_RUST=1.
+ *
+ * Contract for all out_* parameters below: they are set to NULL/0 as soon
+ * as argument validation passes, and only overwritten on success. Callers
+ * do not need to pre-initialize them, but must not assume they are
+ * touched at all before the null-argument check runs (i.e. do not read
+ * them if this function returned early due to a NULL required argument).
  */
 
 #ifndef HEIMDAL_PKINIT_H
