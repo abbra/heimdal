@@ -279,28 +279,65 @@ run_kinit() {
     fi
 }
 
+# Like run_kinit, but also requires the KDC log to confirm the specific
+# key-exchange group was actually negotiated -- kinit succeeding isn't
+# proof the --key-agreement request took effect.
+run_kinit_with_group_check() {
+    local desc="$1"
+    local expect_group="$2"
+    shift 2
+    echo "Trying $desc"; > "$WORKDIR/kdc.log"
+    if "$KINIT" \
+        -C "FILE:${PKI_DIR}/client.pem,${PKI_DIR}/client.key" \
+        --x509-anchors="FILE:${PKI_DIR}/ca.pem" \
+        "$@" \
+        "${CLIENT}@${REALM}" 2>"$WORKDIR/kinit-err.log"; then
+        if grep -q "verified AS-REQ via ${expect_group}" "$WORKDIR/kdc.log"; then
+            testsuccess "$desc"
+        else
+            testfailed "$desc (kinit succeeded but KDC log doesn't confirm $expect_group)"
+        fi
+        "$KDESTROY" -c "$CCACHE" 2>/dev/null || true
+        return 0
+    else
+        testfailed "$desc (kinit exit code: $?)"
+        [ "${VERBOSE:-0}" = "1" ] && cat "$WORKDIR/kinit-err.log"
+        return 1
+    fi
+}
+
 # Basic PKINIT (default key agreement — usually ECDH P-256)
 run_kinit "pk-init (default key agreement)"
 
-# Per-call algorithm selection (--key-agreement, --kdf) is a documented,
-# intentional gap on the Rust backend: krb5_get_init_creds_opt_set_pkinit_allowed_algs()
-# fails loudly (EINVAL) rather than silently ignoring the caller's choice
-# (see lib/krb5/pkinit.c). Skip rather than assert failure, so a real
-# regression (e.g. the call succeeding but picking the wrong algorithm)
-# would still be visible as a change in behavior worth investigating.
-for group in modp_2048 modp_3072; do
-    testskip "pk-init with --key-agreement=$group (per-call algorithm selection not supported on Rust backend)"
-done
+# --key-agreement is supported via pkinit-core's set_dh_group() (see
+# lib/krb5/pkinit.c). modp_3072 has no Oakley-3072 equivalent in
+# pkinit-core (only 2048/4096), so it's expected to fail loudly rather
+# than substitute a different group.
+run_kinit_with_group_check "pk-init with --key-agreement=modp_2048" "DH-2048" \
+    --key-agreement=modp_2048
+run_kinit_with_group_check "pk-init with --key-agreement=modp_4096" "DH-4096" \
+    --key-agreement=modp_4096
+if "$KINIT" -C "FILE:${PKI_DIR}/client.pem,${PKI_DIR}/client.key" \
+    --x509-anchors="FILE:${PKI_DIR}/ca.pem" --key-agreement=modp_3072 \
+    "${CLIENT}@${REALM}" 2>/dev/null; then
+    testfailed "pk-init with --key-agreement=modp_3072 (should be rejected, no Oakley-3072 in pkinit-core)"
+    "$KDESTROY" -c "$CCACHE" 2>/dev/null || true
+else
+    testsuccess "pk-init with --key-agreement=modp_3072 correctly rejected"
+fi
 
 for curve in P-256 P-384 P-521; do
-    testskip "pk-init with --key-agreement=$curve (per-call algorithm selection not supported on Rust backend)"
+    run_kinit_with_group_check "pk-init with --key-agreement=$curve" "ECDH-${curve/-/}" \
+        --key-agreement="$curve"
 done
 
+# --kdf (signature/KDF selection) is still not exposed by pkinit-core for
+# per-call override -- these must still fail loudly.
 for kdf in ah-sha256 ah-sha512; do
-    testskip "pk-init with --kdf=$kdf (per-call algorithm selection not supported on Rust backend)"
+    testskip "pk-init with --kdf=$kdf (per-call KDF selection not supported on Rust backend)"
 done
 
-testskip "pk-init with --key-agreement=P-256 --kdf=ah-sha256 (per-call algorithm selection not supported on Rust backend)"
+testskip "pk-init with --key-agreement=P-256 --kdf=ah-sha256 (per-call KDF selection not supported on Rust backend)"
 
 # ── Step 5: Verify ticket ────────────────────────────────────────────
 
