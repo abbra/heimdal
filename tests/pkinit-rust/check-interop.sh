@@ -431,8 +431,12 @@ echo "=== Test 1: Heimdal KDC (Rust) ←→ Heimdal kinit ==="
 
 setup_heimdal_kdc
 if [ -n "$KDC_PID" ]; then
-    run_heimdal_kinit "Heimdal→Heimdal DH-2048" || true
-    run_heimdal_kinit "Heimdal→Heimdal ECDH P-256 (--key-agreement=P-256)" || true
+    # run_heimdal_kinit() does not take extra kinit flags, and per-call
+    # algorithm selection (--key-agreement) is unsupported on the Rust
+    # backend anyway (see lib/krb5/pkinit.c), so this only exercises the
+    # default key agreement pkinit-core picks — there is no separate
+    # DH-2048 vs. ECDH P-256 case to run here.
+    run_heimdal_kinit "Heimdal→Heimdal (default key agreement)" || true
     check_kdc_log "verified AS-REQ" "KDC log shows Rust verification"
     stop_kdc
 else
