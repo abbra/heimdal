@@ -18,6 +18,8 @@
 use std::ffi::c_void;
 use std::os::raw::c_char;
 
+use pkinit_core::server::BuildAsRepParams;
+
 use crate::bindings;
 use crate::client::PkinitClientCtx;
 use crate::kdc::{self, PkClientParams};
@@ -254,9 +256,22 @@ pub unsafe extern "C" fn heimdal_pkinit_mk_pa_reply(
                 Err(_) => return libc::EINVAL as _,
             };
 
+            // If nonce is 0, use the nonce from the verified request
+            // (the KDC C shim may not have access to it directly).
+            let effective_nonce = if nonce == 0 { cp.verified.nonce } else { nonce };
+
             match unsafe {
                 kdc::build_reply(
-                    context, config, cp, nonce, enctype, as_req_der, client_str, server_str,
+                    context,
+                    config,
+                    cp,
+                    &BuildAsRepParams {
+                        nonce: effective_nonce,
+                        enctype,
+                        as_req_der,
+                        client_name: client_str,
+                        server_name: server_str,
+                    },
                 )
             } {
                 Ok((pa_rep_der, derived)) => {
@@ -739,7 +754,15 @@ pub unsafe extern "C" fn heimdal_pkinit_client_rd_pa_reply(
     };
 
     match client.process_as_rep(
-        context, pa_slice, nonce, enctype, as_req_der, client_str, server_str,
+        context,
+        &pkinit_core::client::AsRepParams {
+            nonce,
+            enctype,
+            as_req_der,
+            pa_rep_raw: pa_slice,
+            client_name: client_str,
+            server_name: server_str,
+        },
     ) {
         Ok(derived) => {
             let key_bytes = derived.key_data.as_ref();

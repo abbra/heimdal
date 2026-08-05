@@ -56,10 +56,10 @@ pub(crate) unsafe fn read_kdc_config(
 
     // pkinit_pqc_min_algorithm
     let pqc_min = unsafe { read_config_string(context, &["kdc", "pkinit_pqc_min_algorithm"]) };
-    if let Some(ref name) = pqc_min {
-        if let Some(alg) = KemAlgorithm::from_name(name) {
-            kdc_config.supported_kem_algorithms = alg.algorithms_at_or_above();
-        }
+    if let Some(ref name) = pqc_min
+        && let Some(alg) = KemAlgorithm::from_name(name)
+    {
+        kdc_config.supported_kem_algorithms = alg.algorithms_at_or_above();
     }
 
     // pkinit_require_freshness

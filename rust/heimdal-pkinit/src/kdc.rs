@@ -13,7 +13,6 @@
 
 use std::sync::RwLock;
 
-use pkinit_core::config::PkinitKdcConfig;
 use pkinit_core::identity::{PkinitIdentity, TrustStore};
 use pkinit_core::server::{BuildAsRepParams, PkinitKdcState, VerifiedRequest};
 
@@ -29,7 +28,6 @@ use crate::trace::pkinit_trace;
 /// certificate DER (needed for `_kdc_pk_check_client`).
 pub struct PkClientParams {
     pub verified: VerifiedRequest,
-    pub subject_name: Option<String>,
 }
 
 /// Global KDC PKINIT state, initialized once by `_kdc_pk_initialize`.
@@ -192,10 +190,7 @@ pub(crate) unsafe fn verify_padata(
                 }
             }
 
-            Ok(Box::new(PkClientParams {
-                verified,
-                subject_name: None,
-            }))
+            Ok(Box::new(PkClientParams { verified }))
         }
         Err(e) => {
             pkinit_trace!(
@@ -230,36 +225,14 @@ pub(crate) unsafe fn build_reply(
     context: bindings::krb5_context,
     config: *mut bindings::krb5_kdc_configuration,
     cp: &PkClientParams,
-    nonce: i32,
-    enctype: i32,
-    as_req_der: &[u8],
-    client_name: &str,
-    server_name: &str,
+    params: &BuildAsRepParams,
 ) -> Result<(Vec<u8>, pkinit_core::crypto::kdf::DerivedKey), bindings::krb5_error_code> {
     let guard = KDC_STATE.read().unwrap_or_else(|e| e.into_inner());
     let state = guard.as_ref().ok_or(libc::EINVAL as bindings::krb5_error_code)?;
 
     let o2k = unsafe { HeimdalOctetString2Key::new(context) };
 
-    // If nonce is 0, use the nonce from the verified request
-    // (the KDC C shim may not have access to it directly)
-    let effective_nonce = if nonce == 0 {
-        cp.verified.nonce
-    } else {
-        nonce
-    };
-
-    match state.build_as_rep(
-        &cp.verified,
-        &BuildAsRepParams {
-            nonce: effective_nonce,
-            enctype,
-            as_req_der,
-            client_name,
-            server_name,
-        },
-        &o2k,
-    ) {
+    match state.build_as_rep(&cp.verified, params, &o2k) {
         Ok((pa_rep_der, derived_key)) => {
             pkinit_trace!(
                 context, config,
@@ -390,7 +363,6 @@ mod tests {
     fn check_client_rejects_certless_request_for_non_anonymous_principal() {
         let cp = PkClientParams {
             verified: anon_verified_request(),
-            subject_name: None,
         };
         // Attacker asks for "administrator@EXAMPLE.COM" with no cert at all.
         // Without the anonymous-principal check this incorrectly succeeds.
@@ -405,7 +377,6 @@ mod tests {
     fn check_client_allows_certless_request_for_true_anonymous_principal() {
         let cp = PkClientParams {
             verified: anon_verified_request(),
-            subject_name: None,
         };
         let result = check_client(
             &cp,

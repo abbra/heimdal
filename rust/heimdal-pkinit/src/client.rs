@@ -13,7 +13,6 @@
 
 use pkinit_core::client::{AsRepParams, PkinitClientState};
 use pkinit_core::config::PkinitClientConfig;
-use pkinit_core::constants::KeyExchangeType;
 use pkinit_core::identity::{IdentitySource, PkinitIdentity, TrustStore};
 
 use crate::bindings;
@@ -22,7 +21,6 @@ use crate::o2k::HeimdalOctetString2Key;
 /// Opaque client-side PKINIT context, replaces `krb5_pk_init_ctx_data`.
 pub struct PkinitClientCtx {
     state: PkinitClientState,
-    config: PkinitClientConfig,
 }
 
 impl PkinitClientCtx {
@@ -32,8 +30,8 @@ impl PkinitClientCtx {
         trust_store: TrustStore,
         config: PkinitClientConfig,
     ) -> Self {
-        let state = PkinitClientState::new(identity, trust_store, config.clone());
-        Self { state, config }
+        let state = PkinitClientState::new(identity, trust_store, config);
+        Self { state }
     }
 
     /// Set the KDC principal and optional hostname for SAN verification.
@@ -65,30 +63,15 @@ impl PkinitClientCtx {
 
     /// Process the KDC's PA-PK-AS-REP and derive the reply key.
     ///
-    /// `as_req_der` is the full DER-encoded AS-REQ that was sent.
+    /// `params.as_req_der` is the full DER-encoded AS-REQ that was sent;
+    /// `params.pa_rep_raw` is the PA-PK-AS-REP being processed.
     pub fn process_as_rep(
         &mut self,
         context: bindings::krb5_context,
-        pa_rep_der: &[u8],
-        nonce: i32,
-        enctype: i32,
-        as_req_der: &[u8],
-        client_name: &str,
-        server_name: &str,
+        params: &AsRepParams,
     ) -> Result<pkinit_core::crypto::kdf::DerivedKey, pkinit_core::error::PkinitError> {
         let o2k = unsafe { HeimdalOctetString2Key::new(context) };
-        self.state.process_as_rep(
-            pa_rep_der,
-            &AsRepParams {
-                nonce,
-                enctype,
-                as_req_der,
-                pa_rep_raw: pa_rep_der,
-                client_name,
-                server_name,
-            },
-            &o2k,
-        )
+        self.state.process_as_rep(params.pa_rep_raw, params, &o2k)
     }
 
     /// Handle a KDC error response with retry hints.
@@ -97,11 +80,6 @@ impl PkinitClientCtx {
         error_padata_der: &[u8],
     ) -> Result<pkinit_core::client::RetryAction, pkinit_core::error::PkinitError> {
         self.state.handle_tryagain(error_padata_der)
-    }
-
-    /// Return the key exchange type selected for the current exchange.
-    pub fn key_exchange(&self) -> Option<KeyExchangeType> {
-        self.state.key_exchange()
     }
 }
 
