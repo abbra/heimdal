@@ -1323,8 +1323,13 @@ pkinit_step(krb5_context context,
 	     */
 	    if (td) {
 		unsigned char *td_der = NULL;
-		size_t td_len = 0;
-		ASN1_MALLOC_ENCODE(TYPED_DATA, td_der, td_len, td, &td_len, ret);
+		size_t td_len = 0, td_size;
+		ASN1_MALLOC_ENCODE(TYPED_DATA, td_der, td_len, td, &td_size, ret);
+		if (ret == 0 && td_len != td_size) {
+		    free(td_der);
+		    td_der = NULL;
+		    ret = EINVAL;
+		}
 		if (ret == 0 && td_der) {
 		    ret = heimdal_pkinit_client_tryagain(ctx->pk_init_ctx,
 						      td_der, td_len);

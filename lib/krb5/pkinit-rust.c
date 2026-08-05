@@ -49,6 +49,33 @@ _krb5_pk_mk_padata_rust(krb5_context context,
     if (c == NULL)
 	return EINVAL;
 
+    if (win2k) {
+	/*
+	 * pkinit-core does not implement Win2k's RSA key transport
+	 * PA-DATA (see the KDC-side Win2k routing in
+	 * kdc/kerberos5.c::pa_pkinit_validate()). There is no runtime
+	 * fallback to the legacy C _krb5_pk_mk_padata() from here
+	 * because pk_init_ctx is a Rust handle by this point (see
+	 * krb5_get_init_creds_opt_set_pkinit()); a PKINIT_RUST client
+	 * cannot speak Win2k PKINIT.
+	 */
+	krb5_set_error_message(context, EINVAL,
+			       N_("PKINIT(rust): Win2k PKINIT is not "
+				  "supported by the Rust PKINIT backend", ""));
+	return EINVAL;
+    }
+
+    /*
+     * ic_flags (KRB5_INIT_CREDS_NO_C_NO_EKU_CHECK,
+     * KRB5_INIT_CREDS_PKINIT_NO_KRBTGT_OTHERNAME_CHECK) relax
+     * certificate validation checks the legacy C path applies; pkinit-core
+     * does not yet expose equivalent per-call relaxations, so these flags
+     * currently have no effect on the Rust path. This is a known,
+     * documented gap (not a silent behavior change from this commit) —
+     * see ANALYSIS.md.
+     */
+    (void)ic_flags;
+
     /* Encode the request body to DER for pkinit-core's checksum */
     ASN1_MALLOC_ENCODE(KDC_REQ_BODY, req_body_der, req_body_len,
 		       req_body, &size, ret);
@@ -61,6 +88,10 @@ _krb5_pk_mk_padata_rust(krb5_context context,
 
     krb5_timeofday(context, &now);
 
+    /* nonce is an opaque bit pattern on both sides of this boundary
+     * (compared for equality, never used as a magnitude), so the
+     * unsigned-to-int narrowing here is safe despite being
+     * implementation-defined for values >= 2^31. */
     ret = heimdal_pkinit_client_mk_padata(c,
 					  (int)nonce,
 					  (long long)now,
@@ -150,6 +181,10 @@ _krb5_pk_rd_pa_reply_rust(krb5_context context,
 	}
     }
 
+    /* nonce is an opaque bit pattern on both sides of this boundary
+     * (compared for equality, never used as a magnitude), so the
+     * unsigned-to-int narrowing here is safe despite being
+     * implementation-defined for values >= 2^31. */
     ret = heimdal_pkinit_client_rd_pa_reply(context,
 					    c,
 					    pa->padata_value.data,
