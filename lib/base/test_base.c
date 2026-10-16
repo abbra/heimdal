@@ -94,6 +94,26 @@ test_memory(void)
 }
 
 static int
+test_allocation_overflow(void)
+{
+    struct heim_type_data type = { 0 };
+    const char data = 0;
+
+    heim_assert(heim_alloc(SIZE_MAX, "memory", NULL) == NULL,
+                "heim_alloc() accepted an overflowing size");
+    heim_assert(_heim_alloc_object(&type, SIZE_MAX) == NULL,
+                "_heim_alloc_object() accepted an overflowing size");
+    heim_assert(heim_data_create(&data, SIZE_MAX) == NULL,
+                "heim_data_create() accepted an overflowing size");
+    heim_assert(heim_data_ref_create(&data, SIZE_MAX, NULL) == NULL,
+                "heim_data_ref_create() accepted an overflowing size");
+    heim_assert(heim_string_create_with_bytes(&data, SIZE_MAX) == NULL,
+                "heim_string_create_with_bytes() accepted an overflowing size");
+
+    return 0;
+}
+
+static int
 test_mutex(void)
 {
     HEIMDAL_MUTEX m = HEIMDAL_MUTEX_INITIALIZER;
@@ -164,6 +184,23 @@ file_contains(const char *filename, const char *needle)
     return found;
 }
 
+static size_t
+file_line_count(const char *filename)
+{
+    size_t lines = 0;
+    FILE *f;
+    int c;
+
+    f = fopen(filename, "r");
+    if (f == NULL)
+        return 0;
+    while ((c = fgetc(f)) != EOF)
+        if (c == '\n')
+            lines++;
+    fclose(f);
+    return lines;
+}
+
 #ifndef WIN32
 static size_t
 remove_log_files(const char *pattern)
@@ -211,12 +248,17 @@ test_log_dest(void)
 
     heim_log(context, fac, 10, "normal level 10");
     heim_log(context, fac, 5, "normal level 5");
+    heim_log(context, fac, 5, "X\n\nY");
     heim_closelog(context, fac);
 
     heim_assert(!file_contains(normal, "normal level 10"),
                 "normal log destination traced level 10 by default");
     heim_assert(file_contains(normal, "normal level 5"),
                 "normal log destination did not log level 5 by default");
+    heim_assert(file_contains(normal, "XY"),
+                "normal log destination did not compact control characters");
+    heim_assert(file_line_count(normal) == 2,
+                "normal log destination retained a newline");
 
     ret = heim_add_trace_dest(context, "test_base", trace);
     heim_assert(ret == 0, "heim_add_trace_dest failed");
@@ -1542,6 +1584,7 @@ main(int argc, char **argv)
 #endif
 
     res |= test_memory();
+    res |= test_allocation_overflow();
     res |= test_mutex();
     res |= test_rwlock();
     res |= test_log_dest();
